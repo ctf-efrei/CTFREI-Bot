@@ -17,25 +17,42 @@ Cela créera tous les dossiers et fichiers nécessaires au fonctionnement du bot
 ## Explication des paramètres `conf.json`
 
 `"DISCORD_TOKEN"` : Ceci est le TOKEN du bot Discord sur lequel vous voulez lancer le bot (string)
+
 `"DISCORD_GUILD_ID"` : Ceci est l'ID du serveur Discord sur lequel le bot fonctionnera (int)
+
 `"INTERACTION_SAVE_FILE"` : Ceci est le fichier dans lequel les informations des interactions (les boutons sur les messages) seront sauvegardées pour permettre de les faire refonctionner après un redémarrage
 
+
 `"UPCOMING_CTFTIME_FILE"` : Ceci est le fichier dans lequel les informations sur les prochains CTF seront stockées (un fichier cache)
+
 `"EVENT_LOG_FILE"` : Ceci est un simple fichier de log pour suivre les activités sur le bot
+
 `"CURRENT_CTF_DIR"` : Ceci est le dossier dans lequel les événements en cours seront stockés (sous format JSON)
+
 `"PAST_CTF_DIR"` : Ceci est le dossier dans lequel les événements passés seront stockés (sous format JSON)
 
+
 `"WEIGHT_RANGE_GENERAL"` : La marge pour la recherche de difficulté (lorsqu'une recherche est faite par rapport à la difficulté des événements). Ceci permet un éventail de choix
+
 `"WEIGHT_START_RECOMMENDATION"` : Difficulté de base pour la recherche de CTFs de recommandation (tous les mercredis)
+
 `"WEIGHT_RANGE_RECOMMENDATION"` : Marge pour la recherche des recommandations
+
 `"WEEKS_RANGE_RECOMMENDATION"` : Définition de la durée avant un événement pour le rendre éligible aux recommandations (si par exemple 8, alors un événement dans plus de 8 semaines ne pourra pas être recommandé)
+
 `"DISABLE_ZERO_WEIGHT_RECOMMENDATION"` : Si 0, autorise les CTFs avec un weight de 0 (soit ceux inconnus ou non mesurables selon CTFTIME) à être recommandés
+
 `"NUMBER_OF_RECOMMENDATIONS"` : Le nombre maximal de recommandations à faire (un message par recommandation)
+
 `"MAX_EVENT_LIMIT"` : Le nombre d'événements qui peut être envoyé au maximum lors d'une réponse du bot. Pour des limites liées à Discord, ce nombre doit rester entre 1 et 25
 
+
 `"CTF_CHANNEL_CATEGORY_ID"` : {"NOM DE VOTRE SERVEUR DISCORD": ID DE LA CATÉGORIE CTF (pour la création des salons)},
+
 `"CTF_JOIN_CHANNEL"` : {"NOM DE VOTRE SERVEUR DISCORD": ID DE LA CATÉGORIE CTF (pour la création des salons)},
+
 `"CTF_ANNOUNCE_CHANNEL"` : {"NOM DE VOTRE SERVEUR DISCORD": {"channel\_id": ID DE VOTRE SALON POUR LES ANNONCES, "role\_id": ID DU RÔLE À PING LORS DES ANNONCES}},
+
 `"ARCHIVE_CATEGORY"` : {"NOM DE VOTRE SERVEUR DISCORD": ID DE LA CATÉGORIE ARCHIVE (où envoyer les salons CTFs quand ils sont finis)},
 
 
