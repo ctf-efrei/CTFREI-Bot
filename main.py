@@ -1,6 +1,6 @@
 import discord
 import json
-import time
+import time as t
 from bot_functions import *
 from discord.ext import commands, tasks
 from discord.ui import Button, View
@@ -28,6 +28,7 @@ WEIGHT_RANGE_GENERAL = conf['WEIGHT_RANGE_GENERAL'] # the spread for the researc
 WEIGHT_START_RECOMMENDATION = conf['WEIGHT_START_RECOMMENDATION'] # the starting weight to start recommending CTFs (used with the RANGE)
 WEEKS_RANGE_RECOMMENDATION = conf['WEEKS_RANGE_RECOMMENDATION']
 WEIGHT_RANGE_RECOMMENDATION = conf['WEIGHT_RANGE_RECOMMENDATION'] # the spread for the recommendation by weight
+DAY_OF_WEEK_RECOMMENDATION = conf['DAY_OF_WEEK_RECOMMENDATION']
 DISABLE_ZERO_WEIGHT_RECOMMENDATION = conf['DISABLE_ZERO_WEIGHT_RECOMMENDATION'] # if 0 than CTFs with 0 weight will be skipped for recommendations
 NUMBER_OF_RECOMMENDATIONS = conf['NUMBER_OF_RECOMMENDATIONS'] # number of CTFs to recommend at once (every wednesday)
 
@@ -240,8 +241,8 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
 
     persistent_data[str(announce_message.id)] = {"role_id": role.id, "finish": CTF_EVENT['finish']} # create the entry for the interaction (persistence post restart)
     save_persistent_data(persistent_data) # save it
-    
-    
+
+
     """OTHER: SEND THE EVENT DATA TO THE NEW CHANNEL"""
 
     await log(ctx, EVENT_LOG_FILE, f"EDIT: added a new CTF ({CTF_EVENT['title']}) as {role.name}\n")
@@ -383,7 +384,7 @@ async def search_json(ctx: discord.Interaction, query: str = None):
 
     if len(matches) == 1:
         matches = matches[0]  # if only one match, use the first element directly
-        # prepare the embeded message for discord limiting to NUMBER_OF_RECOMMENDATIONS 
+        # prepare the embeded message for discord limiting to NUMBER_OF_RECOMMENDATIONS
         embeded_message = discord.Embed(
             title=f"__**{matches['title']}**__",
             description=f"CTF de type {matches['format']} - Onsite: {matches['onsite']} - Location: {matches['location'] if matches['location'] else 'ONLINE'}",
@@ -421,7 +422,7 @@ async def search_json(ctx: discord.Interaction, query: str = None):
         except ValueError:
             await ctx.response.send_message("Erreur lors de la création de la réponse.", ephemeral=True)
             return 1
-        
+
         embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=author_icon)
         embeded_message.set_footer(text="Vous pouvez en apprendre plus sur un certain évènement en utilisant /search {name of the event}", icon_url=footer_icon)
 
@@ -568,7 +569,7 @@ async def end_event(ctx: discord.integrations):
 
         """Move the file to PAST and move discord channel to the archive (optionnal)"""
 
-        rename(full_file_path, f"{PAST_CTF_DIR}{ctx.guild.id}/{event_file}_{int(time.time())}")
+        rename(full_file_path, f"{PAST_CTF_DIR}{ctx.guild.id}/{event_file}_{int(t.time())}")
 
         archive_category = get(ctx.guild.categories, id=ARCHIVE_CATEGORY)
         await ctx.channel.edit(category=archive_category, sync_permissions=True)
@@ -588,12 +589,13 @@ async def end_event(ctx: discord.integrations):
 
 
 """ TRASH COMMAND TO BE REBUILT LATER"""
+"""
 @bot.tree.command(name="vote", description="start the vote on current channel's CTF. (only if over)", guild=discord.Object(id=DISCORD_GUILD_ID))
 async def event_democracy(ctx: discord.integrations, grade: Literal["Absolute Trash", "Not Worth", "OK tier", "Banger"]):
-    """Allow users to give a grade to an event between 4 different possibilities"""
+    #Allow users to give a grade to an event between 4 different possibilities
 
 
-    """retrieve the CTF data (and users_vote if existing)"""
+    #retrieve the CTF data (and users_vote if existing)
     try:
         data = {} # keep or will crash if no file found
         channel_id = ctx.channel.id # used for search
@@ -611,7 +613,7 @@ async def event_democracy(ctx: discord.integrations, grade: Literal["Absolute Tr
         await ctx.response.send_message("Error retrieving the info.", ephemeral=True)
         return 1
 
-    """Set the users vote as grade's value"""
+    #Set the users vote as grade's value
     try:
         users_vote[ctx.user.id] = grade
         data['users_vote'] = users_vote
@@ -624,11 +626,11 @@ async def event_democracy(ctx: discord.integrations, grade: Literal["Absolute Tr
         return 1
 
 
-"""
-idée 1 :
-faire en sorte qu'il envoie un message privé à chaque personne avec le bon role et propose de voter par emoji, message ou intéraction, 
 
-idée 2 : 
+idée 1 :
+faire en sorte qu'il envoie un message privé à chaque personne avec le bon role et propose de voter par emoji, message ou intéraction,
+
+idée 2 :
 lance un message embedded dans le salon avec des émojis ou des bouttons pour voter et enregistre le vote par l'id discord avec un overwrite si la personne vote à nouveau
 
 """
@@ -694,7 +696,7 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
         embeded_message.set_footer(text=error_server, icon_url=footer_icon)
         embeded_message.add_field(name=f"**{com}** Format de Commande", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
-        
+
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
 
     elif commands == "search":
@@ -818,7 +820,7 @@ async def sync(ctx: discord.Interaction):
     await refresh_interactions(ctx.guild.id, CTF_JOIN_CHANNEL[ctx.guild.name])
     await ctx.edit_original_response(content="Commands & interactions synced successfully!")
 
-async def refresh_interactions(DISCORD_GUILD_ID, Channels_id): 
+async def refresh_interactions(DISCORD_GUILD_ID, Channels_id):
     """function to refresh the interactions that are not expired post restart"""
     if persistent_data:
         found= [] # To keep track of messages that were found
@@ -835,7 +837,7 @@ async def refresh_interactions(DISCORD_GUILD_ID, Channels_id):
                     end_time = datetime.fromisoformat(finish_date).timestamp()
                     current = datetime.now().timestamp()
                     timeout_timer = end_time - current  # Calculate time remaining
-                    
+
                     try :
                         message = await channel.fetch_message(int(message_id))
 
@@ -854,7 +856,7 @@ async def refresh_interactions(DISCORD_GUILD_ID, Channels_id):
                         del persistent_data[message_id]
                         save_persistent_data(persistent_data)
                         continue  # Skip further processing for this message if timer's out
-                    
+
                     else: # the timer is still running
                         # Refresh the message with the new timeout
                         role = discord.utils.get(channel.guild.roles, id=data["role_id"])
@@ -885,21 +887,28 @@ async def refresh_interactions(DISCORD_GUILD_ID, Channels_id):
 
 """refresh every 24h of event cache"""
 @tasks.loop(hours=24)
-async def automatic_refresh( ):
+async def automatic_refresh():
     try:
         api_call("https://ctftime.org/api/v1/events/?limit=100", UPCOMING_CTFTIME_FILE)
     except Exception as e:
         print(f"Refresh now: {e}")
 
-@tasks.loop(hours=12, minutes=30)  # Runs every Wednesday at 12:00 UTC
+def loops_check(message):
+    with open("/opt/CTFREI-Bot/code/loops.log", "w") as file:
+        file.write(message)
+
+
+@tasks.loop(hours=12, minutes=1)  # Runs every Wednesday at 12:00 UTC
 async def weekly_refresh():
     """look at the list of upcoming CTFs and sends a message with 5 CTFs where the difficulty is within 20 to 40"""
 
-    if datetime.now().weekday() != 2:  # Check if today is not Monday
+    loops_check("loop started")
+
+    if datetime.today().isoweekday() != DAY_OF_WEEK_RECOMMENDATION :  # Check if today is monday
         return
 
-    data = await search_ctf_data(UPCOMING_CTFTIME_FILE, str(WEIGHT_START_RECOMMENDATION), int(WEIGHT_RANGE_RECOMMENDATION)) 
-    
+    data = await search_ctf_data(UPCOMING_CTFTIME_FILE, str(WEIGHT_START_RECOMMENDATION), int(WEIGHT_RANGE_RECOMMENDATION))
+
     # check if any are coming in the next X weeks
     now = datetime.now(timezone.utc)
     x_weeks_later = now + timedelta(weeks=WEEKS_RANGE_RECOMMENDATION)
@@ -919,14 +928,13 @@ async def weekly_refresh():
     data.sort(key=lambda x: datetime.fromisoformat(x['start']).replace(tzinfo=timezone.utc))
     print(f"Data sorted by date: {len(data)} events found.")
 
-
     # get the discord server by ID
     guild = bot.get_guild(DISCORD_GUILD_ID)  #
     join_channelid = CTF_JOIN_CHANNEL[guild.name]
-    join_channel = guild.get_channel(join_channelid)  
+    join_channel = guild.get_channel(join_channelid)
 
-    
-    # prepare the embeded message for discord limiting to NUMBER_OF_RECOMMENDATIONS 
+
+    # prepare the embeded message for discord limiting to NUMBER_OF_RECOMMENDATIONS
     embeded_message = discord.Embed(
         title="Recommendations de CTFs à venir",
         description=f"Voici les CTFs qui correspondent aux critères suivant : Weight de `{0 if (WEIGHT_START_RECOMMENDATION - WEIGHT_RANGE_RECOMMENDATION) < 0 else (WEIGHT_START_RECOMMENDATION - WEIGHT_RANGE_RECOMMENDATION)} à {100 if (WEIGHT_START_RECOMMENDATION + WEIGHT_RANGE_RECOMMENDATION) > 100 else (WEIGHT_START_RECOMMENDATION + WEIGHT_RANGE_RECOMMENDATION)}` dans les `{WEEKS_RANGE_RECOMMENDATION}` prochaines semaines:",
@@ -936,8 +944,8 @@ async def weekly_refresh():
     await join_channel.send(embed=embeded_message)
 
     for CTF in data[:NUMBER_OF_RECOMMENDATIONS]:
-        
-        # prepare the embeded message for discord limiting to NUMBER_OF_RECOMMENDATIONS 
+
+        # prepare the embeded message for discord limiting to NUMBER_OF_RECOMMENDATIONS
         embeded_message = discord.Embed(
             title=f"__**{CTF['title']}**__",
             description=f"CTF de type {CTF['format']} - Onsite: {CTF['onsite']} - Location: {CTF['location'] if CTF['location'] else 'ONLINE'}",
@@ -968,12 +976,12 @@ async def weekly_refresh():
 
 
 
-"""DEV COMMANDS (DELETE/COMMENT BEFORE PRODUCTION)"""
+#"""DEV COMMANDS (DELETE/COMMENT BEFORE PRODUCTION)"""
 
-@bot.tree.command(name="test", description="dev testing command", guild=discord.Object(id=DISCORD_GUILD_ID))
-async def testing_command(ctx, cmd: str):
+#@bot.tree.command(name="test", description="dev testing command", guild=discord.Object(id=DISCORD_GUILD_ID))
+#async def testing_command(ctx, cmd: str):
 
-    print("test")
+#    print("test")
 
 
 
@@ -1031,9 +1039,11 @@ async def on_ready():
     """bot startup routine"""
     await basic_setup()
     await bot.tree.sync()
-    await refresh_interactions(DISCORD_GUILD_ID, [CTF_JOIN_CHANNEL['Test-Bot-CTFREI'], CTF_ANNOUNCE_CHANNEL['Test-Bot-CTFREI']['channel_id']]) # refresh all current interactions, and delete old join interactions
+    await refresh_interactions(DISCORD_GUILD_ID, [CTF_JOIN_CHANNEL['CTFREI'], CTF_ANNOUNCE_CHANNEL['CTFREI']['channel_id']]) # refresh all current interactions, and delete old join interactions
     automatic_refresh.start()
+    weekly_refresh.start()
     print(f'Logged in as {bot.user}')
+    loops_check("bot restarted")
 
 if CTFREI == '__GOATS__': # FACT
     bot.run(TOKEN)
