@@ -1,14 +1,19 @@
 import requests
 import discord
 import json
+import hashlib
+
+from main import AUTHOR_ICON
+
 from datetime import datetime
 from os import scandir
-import hashlib
+
 
 #generate md5 hash and keeps 8 char (used to have a unique ID on the Events to avoid dupplicates)
 def generate_unique_id(CTFname: str):
     unique_id = (hashlib.md5(CTFname.encode()).hexdigest())[:8]
     return unique_id
+
 
 def list_directory_contents(directory: str):
     try:
@@ -21,14 +26,14 @@ def list_directory_contents(directory: str):
         print(f"You don't have permission to access the directory '{directory}'.")
         return []
 
+
 #look inside the Json data files for match
 async def search_ctf_data(filename: str, query: str, WEIGHT_RANGE: int):
-
-    match = [] # array of match
+    match = []  # array of match
     with open(filename) as json_file:
         events = json.load(json_file)
 
-        if len(query) <= 2: # set as 2 for weight search via INT
+        if len(query) <= 2:  # set as 2 for weight search via INT
             try:
                 # Attempt to convert the query to a float
                 weight_query = float(query)
@@ -40,7 +45,6 @@ async def search_ctf_data(filename: str, query: str, WEIGHT_RANGE: int):
                     min_weight = 0
                 if max_weight > 100:
                     max_weight = 100
-
 
                 for event in events:
                     event_weight = float(event['weight'])  # Convert event weight to float
@@ -84,10 +88,11 @@ async def search_ctf_data(filename: str, query: str, WEIGHT_RANGE: int):
 
         return match
 
+
 # Create a private text channel in the specified category for the role
 async def create_private_channel(guild: discord.guild, category: discord.CategoryChannel, role: discord.Role):
-
-    CTFREI_role = discord.utils.get(guild.roles, name="CTFREI")  # Get the CTFREI role to make sure the bot can access the channel
+    CTFREI_role = discord.utils.get(guild.roles,
+                                    name="CTFREI")  # Get the CTFREI role to make sure the bot can access the channel
 
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(read_messages=False),  # Deny access to everyone
@@ -99,9 +104,9 @@ async def create_private_channel(guild: discord.guild, category: discord.Categor
 
     return private_channel
 
+
 #retrieve a message by its id and reply to it with a given String
 async def reply_message(ctx: discord.integrations, channel: discord.TextChannel, message_id: int, response: str):
-
     if channel is None:
         await ctx.send("Error finding the join channel")
         print("Channel not found.")
@@ -121,13 +126,14 @@ async def reply_message(ctx: discord.integrations, channel: discord.TextChannel,
         await ctx.send("Something went wrong while fetching the message.")
         return None
 
+
 # Retrieve a discord.Category based on the settings' ID (to make sure channels are not created anywhere)
 def get_category_by_id(guild: discord.Guild, category_id: int):
-
     for category in guild.categories:
         if category.id == category_id:
             return category
     return None
+
 
 # Check if the channel name already exists (to make sure channels are not beeing doubled)
 def get_channel_by_name(guild: discord.Guild, channelname: str):
@@ -135,6 +141,7 @@ def get_channel_by_name(guild: discord.Guild, channelname: str):
         if channel.name == channelname:
             return channel
     return None
+
 
 # retrieve the data of an event using the discord role associated to it (not case sensitive)
 async def search_event_data_by_role(filename: str, role: str):
@@ -144,13 +151,13 @@ async def search_event_data_by_role(filename: str, role: str):
     for event in events_data:
         for rolename in event:
             if rolename.lower() == role.lower():
-                return event[role] #returns the information about the CTF
+                return event[role]  #returns the information about the CTF
 
     return None
 
+
 # creates & returns an embedded message based on the event_info given (in the format of ctf_events.json), the integer is to differenciate the color/format.
 async def send_event_info(event_info, id: int):
-
     # Retrieve start, finish, and duration from event_info
     start_time = datetime.fromisoformat(event_info['start'])
     end_time = datetime.fromisoformat(event_info['finish'])
@@ -176,11 +183,10 @@ async def send_event_info(event_info, id: int):
         # Event is over
         status_str = "Event is over"
 
-
-    if id < 2: # case 0 =  first message format (/quickadd for exempl), case 2 = /info format
+    if id < 2:  # case 0 =  first message format (/quickadd for exempl), case 2 = /info format
 
         # Set up the embedded message
-        color = discord.Color.dark_gold() if not id else discord.Color.blurple() # if id 0 then dark_gold, else blurple()
+        color = discord.Color.dark_gold() if not id else discord.Color.blurple()  # if id 0 then dark_gold, else blurple()
         embeded_message = discord.Embed(
             title=f"__{event_info['title']}__",
             url=event_info['url'],
@@ -188,7 +194,8 @@ async def send_event_info(event_info, id: int):
             color=color
         )
 
-        embeded_message.set_author(name="CTF INFORMATION (CTFTIME)", url=event_info['ctftime_url'],icon_url="https://www.efrei.fr/wp-content/uploads/2024/07/ctefrei.png")
+        embeded_message.set_author(name="CTF INFORMATION (CTFTIME)", url=event_info['ctftime_url'],
+                                   icon_url=AUTHOR_ICON)
         embeded_message.add_field(name="Weight", value=f"**{event_info['weight']}**", inline=True)
         embeded_message.add_field(name="Onsite", value=f"{event_info['onsite']}", inline=True)
         embeded_message.add_field(name="Format", value=f"{event_info['format']}", inline=True)
@@ -198,16 +205,19 @@ async def send_event_info(event_info, id: int):
         embeded_message.add_field(name="Status", value=f"{status_str}", inline=True)
         embeded_message.add_field(name="URI", value=f"[CTFd]({event_info['url']})", inline=True)
 
-        embeded_message.set_image(url="https://cdn.discordapp.com/attachments/1167256768087343256/1202189774836731934/CTFREI_Banniere_920_x_240_px_1.png?ex=67162479&is=6714d2f9&hm=c649d21b2152c0200b9466a29c09a04865387410258c1c228c8df58db111c539&")
+        embeded_message.set_image(
+            url="https://cdn.discordapp.com/attachments/1167256768087343256/1202189774836731934/CTFREI_Banniere_920_x_240_px_1.png?ex=67162479&is=6714d2f9&hm=c649d21b2152c0200b9466a29c09a04865387410258c1c228c8df58db111c539&")
 
         if event_info['logo']:
             embeded_message.set_thumbnail(url=event_info['logo'])
 
         return embeded_message
 
+
 async def log(ctx: discord.integrations, FILE: str, logs: str):
     with open(FILE, 'a') as log:
         log.write(f"{ctx.guild.name}: user:{ctx.user.name} ({ctx.user.id}): {logs}")
+
 
 # make an api call on a url and retrieves all the data, then put it in a file.
 def api_call(url: str, filename: str):
@@ -229,7 +239,7 @@ def api_call(url: str, filename: str):
 
         #print(data)
         with open(filename, 'w') as fp:
-             json.dump(data, fp, indent=4)
+            json.dump(data, fp, indent=4)
 
         print(f"{url} data has been saved to {filename}")
 
@@ -237,5 +247,5 @@ def api_call(url: str, filename: str):
 
 
     except Exception as e:
-            print(f"An error occurred: {e}")
-            return None
+        print(f"An error occurred: {e}")
+        return None

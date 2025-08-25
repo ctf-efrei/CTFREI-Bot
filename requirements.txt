@@ -18,3 +18,5 @@ typing==3.7.4.3
 urllib3==2.3.0
 yarl==1.18.3
 zope.interface==7.2
+
+fastapi~=0.116.1

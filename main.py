@@ -1,5 +1,5 @@
-import discord
-import json
+# import discord
+# import json
 import time as t
 from bot_functions import *
 from discord.ext import commands, tasks
@@ -32,7 +32,7 @@ DAY_OF_WEEK_RECOMMENDATION = conf['DAY_OF_WEEK_RECOMMENDATION']
 DISABLE_ZERO_WEIGHT_RECOMMENDATION = conf['DISABLE_ZERO_WEIGHT_RECOMMENDATION'] # if 0 than CTFs with 0 weight will be skipped for recommendations
 NUMBER_OF_RECOMMENDATIONS = conf['NUMBER_OF_RECOMMENDATIONS'] # number of CTFs to recommend at once (every wednesday)
 
-MAX_EVENT_LIMIT = conf['MAX_EVENT_LIMIT'] - 1 # limit the maximum amount of event to be printed out by the bot in a single message (mostly to avoid crashing)
+MAX_EVENT_LIMIT = max(conf['MAX_EVENT_LIMIT'] - 1, 0) # limit the maximum amount of event to be printed out by the bot in a single message (mostly to avoid crashing)
 CTF_CHANNEL_CATEGORY_ID = conf['CTF_CHANNEL_CATEGORY_ID']# the list of all the categories the bot can modify (one per server)
 CTF_JOIN_CHANNEL = conf['CTF_JOIN_CHANNEL'] # channel to send msg
 CTF_ANNOUNCE_CHANNEL = conf['CTF_ANNOUNCE_CHANNEL'] # channel to send the announce
@@ -42,8 +42,8 @@ intents.messages = True
 intents.message_content = True
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-author_icon = "https://www.efrei.fr/wp-content/uploads/2024/07/ctefrei.png" # this is hardcoded once in bot_functions
-footer_icon = "https://play-lh.googleusercontent.com/WOWsciDNUp-ilSYTtZ_MtkhZrhXBFp_y5KNGK0x7h2OnaqSe6JdRgQgbvBEUbNhuKxrW"
+AUTHOR_ICON = "https://ctfrei.fr/static-img/logo_red_alpha.png"
+FOOTER_ICON = "https://play-lh.googleusercontent.com/WOWsciDNUp-ilSYTtZ_MtkhZrhXBFp_y5KNGK0x7h2OnaqSe6JdRgQgbvBEUbNhuKxrW"
 
 optional_thumbnail="https://cdn.discordapp.com/attachments/1167256768087343256/1202189272707502080/CFTREI_Story.png?ex=67517782&is=67502602&hm=308d0f9c1577dfad2a898dd262ad1e526127c115cf165a193d02ea5585ada2a3&"
 
@@ -56,6 +56,7 @@ def load_persistent_data():
         with open(INTERACTION_SAVE_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
+        print("Interaction save file not found.")
         return {}
 
 def save_persistent_data(data):
@@ -70,17 +71,17 @@ class PersistentView(View):
         self.add_item(RoleButton(role))
 
 class RoleButton(Button):
-        def __init__(self, role):
-            super().__init__(label="🚩 Rejoindre ce CTF!", style=discord.ButtonStyle.success)
-            self.role = role
+    def __init__(self, role):
+        super().__init__(label="🚩 Rejoindre ce CTF!", style=discord.ButtonStyle.success)
+        self.role = role
 
-        async def callback(self, interaction: discord.Interaction):
-            user = interaction.user
-            if self.role not in user.roles:
-                await user.add_roles(self.role)
-                await interaction.response.send_message(f"Vous avez récupéré le rôle {self.role.name} !", ephemeral=True)
-            else:
-                await interaction.response.send_message(f"Vous avez déjà le rôle {self.role.name}.", ephemeral=True)
+    async def callback(self, interaction: discord.Interaction):
+        user = interaction.user
+        if self.role not in user.roles:
+            await user.add_roles(self.role)
+            await interaction.response.send_message(f"Vous avez récupéré le rôle {self.role.name} !", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"Vous avez déjà le rôle {self.role.name}.", ephemeral=True)
 
 
 
@@ -102,10 +103,10 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
     # tries to find the ctf, if not found it'll stop the program
     CTF_EVENT = await search_ctf_data(filename=UPCOMING_CTFTIME_FILE, query=ctf_name, WEIGHT_RANGE=WEIGHT_RANGE_GENERAL)
     if not CTF_EVENT:
-        await ctx.response.send_message("Erreur: Aucun CTF ne correspond. Utilise /search pour verifier le nom de ton CTF.", ephemeral=True)
+        await ctx.response.send_message("Erreur: Aucun CTF ne correspond. Utilise /search pour vérifier le nom de ton CTF.", ephemeral=True)
         return None
     elif len(CTF_EVENT) > 1:
-        await ctx.response.send_message("Erreur: Plus d'un CTF correspond à ce nom. Utilise /search pour t'assurer que tu n'ajoute qu'un seul CTF.", ephemeral=True)
+        await ctx.response.send_message("Erreur: Plus d'un CTF correspond à ce nom. Utilise /search pour t'assurer que tu n'ajoutes qu'un seul CTF.", ephemeral=True)
         return None
 
     try:
@@ -118,7 +119,7 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
         current = datetime.now().timestamp()
         timeout_timer = end_time - current  # Calculate time remaining until end for interaction
     except ValueError:
-        await ctx.response.send_message('Erreur pendant la récupération des données. Si cela continue contacte un administrateur.', ephemeral=True)
+        await ctx.response.send_message('Erreur pendant la récupération des données. Si cela continue, contacte un administrateur.', ephemeral=True)
         return 1
 
 
@@ -129,7 +130,7 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
         event_id = generate_unique_id(str(CTF_EVENT[0]['title']))  # To avoid duplicates with different roles
         for event in current_events:
             if event_id in event:
-                await ctx.response.send_message("l'évènement semble déjà être enregistrer sur ce serveur, verifier avec /listevents.", ephemeral=True)
+                await ctx.response.send_message("L'évènement semble déjà être enregistré sur ce serveur, verifie avec /listevents.", ephemeral=True)
                 return None
 
         CTF_EVENT = CTF_EVENT[0]  # Select the data of the event
@@ -149,7 +150,7 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
     """Check if event is over (for interaction mostly)"""
 
     if timeout_timer < 0:
-        await ctx.response.send_message(f"L'évènement semble déjà avoir été fini ({CTF_EVENT['finish'][:10:]})", ephemeral=True)
+        await ctx.response.send_message(f"L'évènement semble déjà être terminé ({CTF_EVENT['finish'][:10:]})", ephemeral=True)
         return None
 
     """ALL THE CHECKS PASSED: CREATING ALL THE ROLES AND CHANNELS"""
@@ -300,20 +301,20 @@ async def upcoming_ctf(ctx: discord.Interaction, max_events: int = MAX_EVENT_LIM
     try:
         count = 0 # variable to limit the amount of output per message (discord limits)
         for event in events:
-            if (event['location'] == ''):
+            if event['location'] == '':
 
                 event_info = f"Weight: {event['weight']} | {event['format']} | starts : <t:{int((datetime.fromisoformat(event['start'])).timestamp())}:R>" # format for the output of the CTF upcoming lists for each event
                 embeded_message.add_field(name=event['title'], value=event_info, inline=False)
 
                 count += 1
 
-            if (count >= max_events):
+            if count >= max_events:
                 break
     except ValueError:
         ctx.response.send_message("Erreur lors de la lecture de la liste des évènements.", ephemeral=True)
         return 1
-    embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=author_icon)
-    embeded_message.set_footer(text="Pour plus d'évènement utiliser /upcoming {number}\nVous pouvez également en apprendre plus sur un évènement avec la commande /search {nom de l'évènement}", icon_url=footer_icon)
+    embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=AUTHOR_ICON)
+    embeded_message.set_footer(text="Pour plus d'évènement utiliser /upcoming {number}\nVous pouvez également en apprendre plus sur un évènement avec la commande /search {nom de l'évènement}", icon_url=FOOTER_ICON)
 
     embeded_message.set_thumbnail(url=optional_thumbnail)
 
@@ -356,7 +357,7 @@ async def list_registered_events(ctx: discord.Integration):
         await ctx.response.send_message("Erreur lors de l'utilisation de la données.", ephemeral=True)
         return 1
 
-    embeded_message.set_footer(text="Vous pouvez en apprendre plus sur un certain évènement en cours en utilisant /registered_search {eventID}", icon_url=footer_icon)
+    embeded_message.set_footer(text="Vous pouvez en apprendre plus sur un certain évènement en cours en utilisant /registered_search {eventID}", icon_url=FOOTER_ICON)
 
     await ctx.response.send_message(embed=embeded_message, ephemeral=True)
     return None
@@ -365,7 +366,7 @@ async def list_registered_events(ctx: discord.Integration):
 async def search_json(ctx: discord.Interaction, query: str = None):
     """search the upcoming file for matches, can use integer for weight search, for strings for name/tag search"""
 
-    if (query == None):
+    if query is None:
         await ctx.response.send_message(f"S'il vous plait ajouter une entrer: \n- **string** => cherche un évènement par nom/tag\n- **integer** => cherche un niveau de difficulté (marge de {WEIGHT_RANGE_GENERAL})", ephemeral=True)
         return None
 
@@ -402,7 +403,7 @@ async def search_json(ctx: discord.Interaction, query: str = None):
 
         embeded_message.add_field(name="**Description:**", value=f"{matches['description'][:1200:]}", inline=False)
 
-        embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=author_icon)
+        embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=AUTHOR_ICON)
 
     else:
         embeded_message = discord.Embed(
@@ -423,8 +424,8 @@ async def search_json(ctx: discord.Interaction, query: str = None):
             await ctx.response.send_message("Erreur lors de la création de la réponse.", ephemeral=True)
             return 1
 
-        embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=author_icon)
-        embeded_message.set_footer(text="Vous pouvez en apprendre plus sur un certain évènement en utilisant /search {name of the event}", icon_url=footer_icon)
+        embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=AUTHOR_ICON)
+        embeded_message.set_footer(text="Vous pouvez en apprendre plus sur un certain évènement en utilisant /search {name of the event}", icon_url=FOOTER_ICON)
 
 
     await log(ctx, EVENT_LOG_FILE, f"GET: searched for {query}\n")
@@ -460,7 +461,7 @@ async def search_registered_events(ctx: discord.Integration, event_id: str):
         color=color
     )
 
-    embeded_message.set_author(name="CTF INFORMATION", url=full_data['url'], icon_url=author_icon)
+    embeded_message.set_author(name="CTF INFORMATION", url=full_data['url'], icon_url=AUTHOR_ICON)
     embeded_message.add_field(name="Weight", value=f"**{full_data['weight']}**", inline=True)
     embeded_message.add_field(name="Rejoindre ici:", value=f"{message_link}", inline=True)
     embeded_message.add_field(name="Commence:", value=f"<t:{int((datetime.fromisoformat(full_data['start'])).timestamp())}:F>", inline=False)
@@ -654,11 +655,15 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
             description=f"{com} est une commande pour afficher les évènements actuellement disponible sur le serveur.\nelle informe l'utilisateur :\n- le weight (difficulter de l'évènement selon CTFTIME de 0 à 100)\n- Quand l'évènement commence\n- Son ID (spécifique au Bot CTFREI pour /registered_search)\n- Le salon d'évènement et le lien du message pour rejoindre si jamais vous n'avez pas accès au salon.",
             color=discord.Color.pink()  # Color of the side bar (you can change the color)
         )
-        embeded_message.set_author(name="CTFREI HELP", url="https://github.com/Lawcky/CTFREI-Bot/", icon_url=author_icon)
+        embeded_message.set_author(
+            name="CTFREI HELP",
+            url="https://github.com/ctf-efrei/ctfrei-web-front",
+            icon_url=AUTHOR_ICON
+        )
 
         format = f"`/{com} [aucun argument]`"
         usage_exemple = f"`/{com}`"
-        embeded_message.set_footer(text=error_server, icon_url=footer_icon)
+        embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande ", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
 
@@ -671,11 +676,15 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
             description=f"{com} est une commande pour afficher les X (par défaut {MAX_EVENT_LIMIT}) prochains évènements CTFs à venir selon CTFTIME .\nIl récupère les informations à partir d'un fichier cache qui est mis à jour toutes les 24h (ou à chaque /refresh), et donne à l'utilisateur :\n- Le nom de l'évènement\n- Le Weight (difficulter de l'évènement selon CTFTIME de 0 à 100)\n- Le format de l'évènement\n- La date à laquelle le CTF commence.",
             color=discord.Color.pink()  # Color of the side bar (you can change the color)
         )
-        embeded_message.set_author(name="CTFREI HELP", url="https://github.com/Lawcky/CTFREI-Bot/", icon_url=author_icon)
+        embeded_message.set_author(
+            name="CTFREI HELP",
+            url="https://github.com/ctf-efrei/ctfrei-web-front",
+            icon_url=AUTHOR_ICON
+        )
 
         format = f"`/{com} [Nombre (OPTIONNEL)->INT]`"
         usage_exemple = f"`/{com}`\n`/{com} 15`"
-        embeded_message.set_footer(text=error_server, icon_url=footer_icon)
+        embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
         embeded_message.add_field(name=f"**{com}** Description des Options ", value=f"Cette valeur défini le nombre totale d'évènement à afficher.\nLa valeur par défaut est {MAX_EVENT_LIMIT} et le maximum est 25.", inline=False)
@@ -689,11 +698,15 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
             description=f"{com} est une commande qui permet de raffraichir le fichier cache contenant tout les CTFs de CTFTIME.\nCette function est lancé automatiquement toute les 24h mais vous pouvez toujours la lancer si besoin.",
             color=discord.Color.pink()  # Color of the side bar (you can change the color)
         )
-        embeded_message.set_author(name="CTFREI HELP", url="https://github.com/Lawcky/CTFREI-Bot/", icon_url=author_icon)
+        embeded_message.set_author(
+            name="CTFREI HELP",
+            url="https://github.com/ctf-efrei/ctfrei-web-front",
+            icon_url=AUTHOR_ICON
+        )
 
         format = f"`/{com} [aucun argument]`"
         usage_exemple = f"`/{com}`"
-        embeded_message.set_footer(text=error_server, icon_url=footer_icon)
+        embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
 
@@ -706,11 +719,15 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
             description=f"{com} est une commande pour récupérer les informations sur les __PROCHAINS__ CTFs.\nCette commande prend 2 forme de queries, elle peut chercher à partir d'un nom/mot, ou utiliser un chiffre pour chercher par difficulté (la marge est de {WEIGHT_RANGE_GENERAL}), Le resultat est sous forme de liste.",
             color=discord.Color.pink()  # Color of the side bar (you can change the color)
         )
-        embeded_message.set_author(name="CTFREI HELP", url="https://github.com/Lawcky/CTFREI-Bot/", icon_url=author_icon)
+        embeded_message.set_author(
+            name="CTFREI HELP",
+            url="https://github.com/ctf-efrei/ctfrei-web-front",
+            icon_url=AUTHOR_ICON
+        )
 
         format = f"`/{com} [query: INT ou query: STR]`"
         usage_exemple = f"`/{com} HTB`\n`/{com} 20`\n`/{com} LakeCTF Quals 24-25`"
-        embeded_message.set_footer(text=error_server, icon_url=footer_icon)
+        embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
         embeded_message.add_field(name=f"**{com}** Description des Options", value=f"La **recherche par nom/mots** est une simple recherche par string (non case sensitive).\n\nLa **recherche par weight** utiliser une portée de recherche comme marge (par défaut {WEIGHT_RANGE_GENERAL}) ce qui permet de lister les prochains évènements à travers un éventail de difficulté, par exemple si vous chercher avec le weight \"20\" vous obtiendrez une liste d'évènement entre {0 if (16-WEIGHT_RANGE_GENERAL<0) else (16-WEIGHT_RANGE_GENERAL)} and {100 if (16+WEIGHT_RANGE_GENERAL>=100) else (16+WEIGHT_RANGE_GENERAL)}.", inline=False)
@@ -725,11 +742,15 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
             description=f"{com} est une commande pour récupérer plus d'information sur des CTFs __en cours__ et enregistrés sur le serveur\nElle peut prendre en entrer l'ID de l'évènement (/listevents pour les voir), vous pouvez aussi lui donner le nom du role associé à l'évènement.",
             color=discord.Color.pink()  # Color of the side bar (you can change the color)
         )
-        embeded_message.set_author(name="CTFREI HELP", url="https://github.com/Lawcky/CTFREI-Bot/", icon_url=author_icon)
+        embeded_message.set_author(
+            name="CTFREI HELP",
+            url="https://github.com/ctf-efrei/ctfrei-web-front",
+            icon_url=AUTHOR_ICON
+        )
 
         format = f"`/{com} [id: STR ou role: STR]`"
         usage_exemple = f"`/{com} d62cd16c`\n`/{com} exemple_quals_2024`"
-        embeded_message.set_footer(text=error_server, icon_url=footer_icon)
+        embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
 
@@ -742,19 +763,30 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
             description=f"{com} est la commande pour ajouter des évènements au serveur à partir des informations CTFTIME.\nPour enregistrer un nouvelle évènement vous aurez besoin de :\n- Donner le nom du CTF comme il est écrit sur CTFTIME, comme c'est montré dans la sortie de `/upcoming`.\n- de créer un nom pour le role qui sera utilisé.",
             color=discord.Color.pink()  # Color of the side bar (you can change the color)
         )
-        embeded_message.set_author(name="CTFREI HELP", url="https://github.com/Lawcky/CTFREI-Bot/", icon_url=author_icon)
+        embeded_message.set_author(
+            name="CTFREI HELP",
+            url="https://github.com/ctf-efrei/ctfrei-web-front",
+            icon_url=AUTHOR_ICON
+        )
 
         format = f"`/{com} [rolename: STR] [ctfname: STR]`"
         usage_exemple = f"`/{com} htb_uni_2024 HTB University CTF 2024`\n`/{com} saarCTF_2024 saarCTF 2024`"
-        restrictions = "Ils existent différentes restrictions pour que cette commande aboutisse.\nCes restrictions sont :\n- Si aucun évènement n'a été trouver, ou si plus d'un évènement à été trouvé lors de la recherche.\n- Le CTF est déjà présent sur le serveur (`/listevents`).\n- le nom du rôle existe déjà sur le serveur.\n- un salon avec ce nom (celui du rôle) existe déjà sur le serveur.\n- l'évènement est déjà fini (dans le cas ou le fichier cache n'aurait pas été mis à jour)."
+        restrictions = ("Ils existent différentes restrictions pour que cette commande aboutisse."
+                        "\nCes restrictions sont :"
+                        "\n- Si aucun évènement n'a été trouvé,"
+                        " ou si plus d'un évènement a été trouvé lors de la recherche."
+                        "\n- Le CTF est déjà présent sur le serveur (`/listevents`)."
+                        "\n- le nom du rôle existe déjà sur le serveur."
+                        "\n- un salon avec ce nom (celui du rôle) existe déjà sur le serveur."
+                        "\n- l'évènement est déjà fini (dans le cas ou le fichier cache n'aurait pas été mis à jour).")
         search_info = "**Note**: la fonction de recherche est exactement la meme que pour `/search`\nPour que la commande `/quickadd` fonctionne avec le nom de CTF que vous donnez vous devez vous assurez que `/search` fonctionne avec votre query."
         # role_format=""
         # role_warning=""
-        embeded_message.set_footer(text=error_server, icon_url=footer_icon)
+        embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
         embeded_message.add_field(name=f"**{com}** Restrictions de Commande", value=restrictions, inline=False)
-        embeded_message.add_field(name=f"**{com}** Mechanisme de recherche", value=search_info, inline=False)
+        embeded_message.add_field(name=f"**{com}** Mécanisme de recherche", value=search_info, inline=False)
         # embeded_message.add_field(name=f"**{com}** Format de nom de role", value=role_format, inline=False)
         # embeded_message.add_field(name=f"**{com}** Avertissement de Nom de Role", value=role_warning, inline=False)
 
@@ -767,11 +799,15 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
             description=f"{com} sont des commandes utilisées pour voir et gérer des salons CTF dédiés (ceux créés par le Bot), ces commandes peuvent **uniquement** être lancer à l'intérieur de salon CTF en cours, ces salons sont listés dans /listevents.",
             color=discord.Color.pink()  # Color of the side bar (you can change the color)
         )
-        embeded_message.set_author(name="CTFREI HELP", url="https://github.com/Lawcky/CTFREI-Bot/", icon_url=author_icon)
+        embeded_message.set_author(
+            name="CTFREI HELP",
+            url="https://github.com/ctf-efrei/ctfrei-web-front",
+            icon_url=AUTHOR_ICON
+        )
 
         format = f"`/info [no arguments]`\n`/description [no arguments]`\n`/vote [value: Litteral]`\n`/end [no arguments]`"
         usage_exemple = f"`/info`\n`/description`\n`/vote Banger`\n`/end`"
-        embeded_message.set_footer(text=error_server, icon_url=footer_icon)
+        embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande ", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
         embeded_message.add_field(name=f"**{com}** Information Importante", value="Ces commandes marche uniquement pour les évènement encore en cours, créés par le Bot et qui n'ont pas été archivés avec la commande /end", inline=False)
@@ -794,18 +830,18 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["listevents"
 @bot.command(name="setup-ctfrei") # run /setup-ctfrei first time the bot is on a server (will setup file directories for said server)
 async def setup_dir(ctx: discord.integrations):
     """setup command for each server to setup the file system (does not appear as an actual command on servers)"""
-    if (not p.isdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}")): # create server's dedicated dir in current
+    if not p.isdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}"): # create server's dedicated dir in current
         mkdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}")
         print(f"Discord CTF dir ({CURRENT_CTF_DIR}{ctx.guild.id}) has been created ")
 
-    if (not p.isdir(f"{PAST_CTF_DIR}{ctx.guild.id}")): # create server's dedicated dir in past
+    if not p.isdir(f"{PAST_CTF_DIR}{ctx.guild.id}"): # create server's dedicated dir in past
         mkdir(f"{PAST_CTF_DIR}{ctx.guild.id}")
         print(f"Discord CTF dir ({PAST_CTF_DIR}{ctx.guild.id}) has been created ")
 
     print(f"\nSERVER INFORMATIONS:\n\nServer: {ctx.guild.name}\nServer ID: {ctx.guild.id}\nCurrent Channel: {ctx.channel.id}\nCurrent Category: {ctx.channel.category.id}")
 
 
-    if (p.isdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}") and p.isdir(f"{PAST_CTF_DIR}{ctx.guild.id}") and p.isfile(UPCOMING_CTFTIME_FILE)):
+    if p.isdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}") and p.isdir(f"{PAST_CTF_DIR}{ctx.guild.id}") and p.isfile(UPCOMING_CTFTIME_FILE):
         return 0
     else:
         print("something went wrong during the setup")
@@ -820,13 +856,13 @@ async def sync(ctx: discord.Interaction):
     await refresh_interactions(ctx.guild.id, CTF_JOIN_CHANNEL[ctx.guild.name])
     await ctx.edit_original_response(content="Commands & interactions synced successfully!")
 
-async def refresh_interactions(DISCORD_GUILD_ID, Channels_id):
+async def refresh_interactions(discord_guild_id, Channels_id):
     """function to refresh the interactions that are not expired post restart"""
     if persistent_data:
         found= [] # To keep track of messages that were found
         not_found = []  # To keep track of messages that were not found
         for channel_id in Channels_id:
-            guild = bot.get_guild(DISCORD_GUILD_ID)  # The server to refresh
+            guild = bot.get_guild(discord_guild_id)  # The server to refresh
             channel = guild.get_channel(channel_id)  # The channel to refresh
 
             if channel:
@@ -929,7 +965,7 @@ async def weekly_refresh():
     print(f"Data sorted by date: {len(data)} events found.")
 
     # get the discord server by ID
-    guild = bot.get_guild(DISCORD_GUILD_ID)  #
+    guild = bot.get_guild(DISCORD_GUILD_ID)
     join_channelid = CTF_JOIN_CHANNEL[guild.name]
     join_channel = guild.get_channel(join_channelid)
 
@@ -996,28 +1032,28 @@ async def weekly_refresh():
 async def basic_setup():
     """minimum necessary to start the bot, is checked as startup"""
     try:
-        if (not p.isdir('log')):
+        if not p.isdir('log'):
             mkdir('log')
             print(f"Current CTF dir ('/log') has been created.")
 
-        if (not p.isdir(CURRENT_CTF_DIR)): # check for current CTF dir
+        if not p.isdir(CURRENT_CTF_DIR): # check for current CTF dir
             mkdir(CURRENT_CTF_DIR)
             print(f"Current CTF dir ({CURRENT_CTF_DIR}) has been created ")
 
-        if (not p.isdir(PAST_CTF_DIR)): # check for past CTF dir
+        if not p.isdir(PAST_CTF_DIR): # check for past CTF dir
             mkdir(PAST_CTF_DIR)
             print(f"Past CTF dir ({PAST_CTF_DIR}) has been created ")
 
-        if (not p.isfile(UPCOMING_CTFTIME_FILE)):
+        if not p.isfile(UPCOMING_CTFTIME_FILE):
             temp = {}
             with open(UPCOMING_CTFTIME_FILE, 'x') as filecreation:
                 json.dump(temp, filecreation)
 
-        if (not p.isfile(EVENT_LOG_FILE)):
+        if not p.isfile(EVENT_LOG_FILE):
             with open(EVENT_LOG_FILE, 'x') as filecreation:
                 filecreation.write("Here starts the log file for the CTFREI bot.\n")
 
-        if (not p.isfile(INTERACTION_SAVE_FILE)):
+        if not p.isfile(INTERACTION_SAVE_FILE):
             with open(INTERACTION_SAVE_FILE, 'x') as filecreation:
                 filecreation.write('{}')
 
