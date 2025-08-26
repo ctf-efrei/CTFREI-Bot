@@ -3,7 +3,7 @@ import discord
 import json
 import hashlib
 
-from main import AUTHOR_ICON
+# from main import AUTHOR_ICON
 
 from datetime import datetime
 from os import scandir
@@ -194,8 +194,9 @@ async def send_event_info(event_info, id: int):
             color=color
         )
 
+        # todo remplace par main.AUTHOR_ICON
         embeded_message.set_author(name="CTF INFORMATION (CTFTIME)", url=event_info['ctftime_url'],
-                                   icon_url=AUTHOR_ICON)
+                                   icon_url="https://ctfrei.fr/static-img/logo_red_alpha.png")
         embeded_message.add_field(name="Weight", value=f"**{event_info['weight']}**", inline=True)
         embeded_message.add_field(name="Onsite", value=f"{event_info['onsite']}", inline=True)
         embeded_message.add_field(name="Format", value=f"{event_info['format']}", inline=True)

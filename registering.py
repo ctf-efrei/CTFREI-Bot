@@ -1,13 +1,10 @@
-import hmac, hashlib, os
+import hashlib
+import hmac
 
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, HTTPException
 
-from .main import bot
+from settings import DISCORD_GUILD_ID, bot
 
-WEBHOOK_SECRET = os.getenv("DISCORD_SHARED_KEY")
-
-if not WEBHOOK_SECRET:
-    raise ValueError("DISCORD_SHARED_KEY environment variable is not set")
 app = FastAPI()
 
 
@@ -38,14 +35,19 @@ async def ctfd_webhook(request: Request):
 
         # Send msg to registering user
         user = data["discord_name"]
-        d_user = bot.get_guild(int(os.getenv("DISCORD_GUILD_ID"))).get_member_named(user)
-        if not d_user:
-            print(f"Could not find user {user} in guild")
+        guild = bot.get_guild(DISCORD_GUILD_ID)
+        if not guild:
+            return {"status": "error", "code": 500}
+
+        d_user = guild.get_member_named(user)
+        if d_user is None:
+            print(f"Could not find user {user} in guild {guild.name}")
+            print(f"{d_user}")
             return {"status": "error", "code": 404}
         try:
             await d_user.send(
                 f"Bonjour {user}! Voici ton code pour t'inscrire sur le CTFd `{data['code']}`."
-                "Copie ce code dans le champ ""Code d'inscription"" lors de la création de ton compte."
+                "\nCopie ce code dans le champ ""Code d'inscription"" lors de la création de ton compte."
             )
         except Exception as e:
             print(f"Could not send DM to user {user}: {e}")

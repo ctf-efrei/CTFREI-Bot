@@ -1,7 +1,12 @@
-# import discord
-# import json
+import asyncio
+import hmac
+
+import requests as req
 import time as t
+import uvicorn
+
 from bot_functions import *
+from settings import *
 from discord.ext import commands, tasks
 from discord.ui import Button, View
 from discord.utils import get
@@ -10,43 +15,10 @@ from os import path as p
 from os import mkdir, rename
 from typing import Literal
 
+
 """CONFIGURATION LOADING"""
 
 CTFREI = "__GOATS__"
-with open('conf.json') as conf_file:
-    conf = json.load(conf_file)
-
-TOKEN = conf['DISCORD_TOKEN'] # discord token
-DISCORD_GUILD_ID = conf['DISCORD_GUILD_ID'] # discord Guild ID (useless for now)
-
-UPCOMING_CTFTIME_FILE = conf['UPCOMING_CTFTIME_FILE'] # file to save all Events Data (CTFTIME)
-EVENT_LOG_FILE = conf['EVENT_LOG_FILE'] # to be removed when new file system complete
-CURRENT_CTF_DIR = conf['CURRENT_CTF_DIR'] # directory for the current CTF's
-PAST_CTF_DIR = conf['PAST_CTF_DIR'] # directory for the past CTF's
-
-WEIGHT_RANGE_GENERAL = conf['WEIGHT_RANGE_GENERAL'] # the spread for the research by weight
-WEIGHT_START_RECOMMENDATION = conf['WEIGHT_START_RECOMMENDATION'] # the starting weight to start recommending CTFs (used with the RANGE)
-WEEKS_RANGE_RECOMMENDATION = conf['WEEKS_RANGE_RECOMMENDATION']
-WEIGHT_RANGE_RECOMMENDATION = conf['WEIGHT_RANGE_RECOMMENDATION'] # the spread for the recommendation by weight
-DAY_OF_WEEK_RECOMMENDATION = conf['DAY_OF_WEEK_RECOMMENDATION']
-DISABLE_ZERO_WEIGHT_RECOMMENDATION = conf['DISABLE_ZERO_WEIGHT_RECOMMENDATION'] # if 0 than CTFs with 0 weight will be skipped for recommendations
-NUMBER_OF_RECOMMENDATIONS = conf['NUMBER_OF_RECOMMENDATIONS'] # number of CTFs to recommend at once (every wednesday)
-
-MAX_EVENT_LIMIT = max(conf['MAX_EVENT_LIMIT'] - 1, 0) # limit the maximum amount of event to be printed out by the bot in a single message (mostly to avoid crashing)
-CTF_CHANNEL_CATEGORY_ID = conf['CTF_CHANNEL_CATEGORY_ID']# the list of all the categories the bot can modify (one per server)
-CTF_JOIN_CHANNEL = conf['CTF_JOIN_CHANNEL'] # channel to send msg
-CTF_ANNOUNCE_CHANNEL = conf['CTF_ANNOUNCE_CHANNEL'] # channel to send the announce
-
-intents = discord.Intents.default()
-intents.messages = True
-intents.message_content = True
-bot = commands.Bot(command_prefix="/", intents=intents)
-
-AUTHOR_ICON = "https://ctfrei.fr/static-img/logo_red_alpha.png"
-FOOTER_ICON = "https://play-lh.googleusercontent.com/WOWsciDNUp-ilSYTtZ_MtkhZrhXBFp_y5KNGK0x7h2OnaqSe6JdRgQgbvBEUbNhuKxrW"
-
-optional_thumbnail="https://cdn.discordapp.com/attachments/1167256768087343256/1202189272707502080/CFTREI_Story.png?ex=67517782&is=67502602&hm=308d0f9c1577dfad2a898dd262ad1e526127c115cf165a193d02ea5585ada2a3&"
-
 
 """INTERACTIONS' RELATED"""
 
@@ -86,10 +58,46 @@ class RoleButton(Button):
 
 
 
+"""ROLE DETECTION"""
+# @bot.event
+# async def on_member_update(before: discord.Member, after: discord.Member):
+@bot.tree.command(name="memberize", description="Fais de l'utilisateur spécifié un membre (sur CTFd aussi).", guild=discord.Object(id=DISCORD_GUILD_ID))
+@commands.has_permissions(manage_roles=True)
+async def memberize(ctx: discord.Interaction, user: discord.Member):
+    # before_roles = set(before.roles)
+    # after_roles = set(after.roles)
+    # removed = before_roles - after_roles
+    # if removed:
+    #     for role in removed:
+    #         if role.name == "Membre":
+    #             payload["new_state"] = False
+    #             print("Revoking", end=" ")
 
+    guild = ctx.guild
+    role = discord.utils.get(guild.roles, name="Membre")
+    if role is None:
+        await ctx.response.send_message("Pas de role 'Membre' !")
+        return
 
+    await user.add_roles(role, reason=f"membrisé par {ctx.user.name}")
 
+    payload = {
+        "new_state": True
+    }
+    print(f"Giving membership for {user.name}", end=" ")
+    req.patch(
+        f"http://ctfd-ctfd-1:8000/plugins/ctfrei_registration/update_role/{user.name}",
+        headers={
+            "X-Signature": hmac.new(
+                WEBHOOK_SECRET.encode(),
+                json.dumps(payload).encode("utf-8"),
+                hashlib.sha256
+            ).hexdigest()
+        },
+        json=payload
+    )
 
+    await ctx.response.send_message(f"{user.name} est maintenant membre.", ephemeral=True)
 
 
 """CTFTIME COMMANDS (CTFTIME API): FILE MODIFICATION"""
@@ -643,12 +651,32 @@ lance un message embedded dans le salon avec des émojis ou des bouttons pour vo
 
 """HELP"""
 @bot.tree.command(name="help", description="Help command.", guild=discord.Object(id=DISCORD_GUILD_ID))
-async def event_summary(ctx: discord.Interaction, commands: Literal["listevents", "upcoming", "refresh", "search", "registered_search", "quickadd", "info, description, vote, end"]):
+async def event_summary(ctx: discord.Interaction, commands: Literal["memberize", "listevents", "upcoming", "refresh", "search", "registered_search", "quickadd", "info, description, vote, end"]):
 
 
     error_server="Si la commande ne répond pas il s'agit surement d'une erreur serveur.\nSVP contacter un admin pour qu'il puisse vérifier."
 
-    if commands == "listevents":
+    if commands == "memberize":
+        com = "Memberize"
+        embeded_message = discord.Embed(
+            title=f"__{com}__",
+            description=f"{com} transforme l'utilisateur spécifié en membre.\nCela lui donne le role de membre sur le serveur Discord et le CTFd.",
+            color=discord.Color.pink()
+        )
+        embeded_message.set_author(
+            name="CTFREI HELP",
+            url="https://github.com/ctf-efrei/ctfrei-web-front",
+            icon_url=AUTHOR_ICON
+        )
+
+        format = f"`/{com} [user]`"
+        usage_exemple = f"`/{com}`"
+        embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
+        embeded_message.add_field(name=f"**{com}** Format de Commande ", value=format, inline=False)
+        embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
+
+        await ctx.response.send_message(embed=embeded_message, ephemeral=True)
+    elif commands == "listevents":
         com="Listevents"
         embeded_message = discord.Embed(
             title=f"__{com}__",
@@ -930,7 +958,7 @@ async def automatic_refresh():
         print(f"Refresh now: {e}")
 
 def loops_check(message):
-    with open("/opt/CTFREI-Bot/code/loops.log", "w") as file:
+    with open("./loops.log", "w") as file:
         file.write(message)
 
 
@@ -1065,6 +1093,8 @@ async def basic_setup():
 
 @bot.event
 async def on_ready():
+    for guild in bot.guilds:
+        await guild.chunk()
 
     if "testing_command" in globals(): # make sure the testing command is not running in production
         print("#"*20, "\n\nIMPORTANT : THE TESTING COMMAND IS ON (line ~892), PLEASE REMOVE IT BEFORE PRODUCTION.\n\n", "#"*20)
@@ -1081,5 +1111,20 @@ async def on_ready():
     print(f'Logged in as {bot.user}')
     loops_check("bot restarted")
 
+async def start_bot():
+    await bot.start(TOKEN)
+
+async def main():
+    from registering import app
+    # bot_task = asyncio.create_task(start_bot())
+    server = uvicorn.Server(config=uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="info"))
+    api_task = asyncio.create_task(server.serve())
+
+    print("Serving...")
+
+    await asyncio.gather(api_task)
+
+
 if CTFREI == '__GOATS__': # FACT
     bot.run(TOKEN)
+    asyncio.run(main())

@@ -4,4 +4,6 @@ conf.*
 todo.txt
 *.json
 __pycache__
+.idea
+loops.log
 *.pyc
