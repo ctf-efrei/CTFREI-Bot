@@ -7,3 +7,5 @@ __pycache__
 .idea
 loops.log
 *.pyc
+
+conf.json

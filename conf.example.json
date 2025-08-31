@@ -1,0 +1,36 @@
+{
+    "DISCORD_TOKEN": "",
+    "DISCORD_GUILD_ID": 1297601609802711061,
+    "INTERACTION_SAVE_FILE": "log/interation.json",
+
+    "UPCOMING_CTFTIME_FILE": "log/api_event_data.json",
+    "EVENT_LOG_FILE": "log/commands.log",
+    "CURRENT_CTF_DIR": "log/current/",
+    "PAST_CTF_DIR": "log/past/",
+
+
+    "WEIGHT_RANGE_GENERAL": 6,
+    "WEIGHT_START_RECOMMENDATION": 30,
+    "WEIGHT_RANGE_RECOMMENDATION": 16,
+    "WEEKS_RANGE_RECOMMENDATION": 8,
+    "DISABLE_ZERO_WEIGHT_RECOMMENDATION": 1,
+    "NUMBER_OF_RECOMMENDATIONS": 3,
+    "MAX_EVENT_LIMIT": 11,
+
+
+    "CTF_CHANNEL_CATEGORY_ID": {
+        "Test-Bot-CTFREI": 1399433912517918740
+    },
+
+    "CTF_JOIN_CHANNEL" : {
+        "Test-Bot-CTFREI": 1399434130990694422
+    },
+
+    "CTF_ANNOUNCE_CHANNEL" : {
+        "Test-Bot-CTFREI": {"channel_id":1399433934747472089, "role_id":1399433986647789568}
+    },
+
+    "ARCHIVE_CATEGORY": {
+        "Test-Bot-CTFREI": 1310013294827798641
+    }
+}
