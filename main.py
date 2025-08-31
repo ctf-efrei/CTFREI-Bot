@@ -1126,5 +1126,5 @@ async def main():
 
 
 if CTFREI == '__GOATS__': # FACT
-    bot.run(TOKEN)
     asyncio.run(main())
+    bot.run(TOKEN)

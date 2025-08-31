@@ -3,7 +3,7 @@ import hmac
 
 from fastapi import FastAPI, Request, HTTPException
 
-from settings import DISCORD_GUILD_ID, bot
+from settings import DISCORD_GUILD_ID, WEBHOOK_SECRET, bot
 
 app = FastAPI()
 
