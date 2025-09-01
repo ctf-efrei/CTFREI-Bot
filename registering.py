@@ -8,6 +8,19 @@ from settings import DISCORD_GUILD_ID, WEBHOOK_SECRET, bot
 app = FastAPI()
 
 
+@app.get("/is_member/{username}")
+async def is_member(username: str):
+    guild = bot.get_guild(DISCORD_GUILD_ID)
+    if not guild:
+        raise HTTPException(status_code=500, detail="Guild not found")
+
+    member = guild.get_member_named(username)
+    if member is None:
+        return {"is_member": False}
+
+    roles = [role.name for role in member.roles]
+    return {"is_member": ("Membre" in roles)}
+
 @app.post("/ctfd-webhook")
 async def ctfd_webhook(request: Request):
     body = await request.body()

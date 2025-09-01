@@ -1116,13 +1116,13 @@ async def start_bot():
 
 async def main():
     from registering import app
-    # bot_task = asyncio.create_task(start_bot())
+    bot_task = asyncio.create_task(start_bot())
     server = uvicorn.Server(config=uvicorn.Config(app, host="0.0.0.0", port=5000, log_level="info"))
     api_task = asyncio.create_task(server.serve())
 
     print("Serving...")
 
-    await asyncio.gather(api_task)
+    await asyncio.gather(api_task, bot_task)
 
 
 if CTFREI == '__GOATS__': # FACT
