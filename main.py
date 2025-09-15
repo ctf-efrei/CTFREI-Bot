@@ -962,7 +962,7 @@ def loops_check(message):
         file.write(message)
 
 
-@tasks.loop(hours=12, minutes=1)  # Runs every Wednesday at 12:00 UTC
+@tasks.loop(hours=24, minutes=1)  # Runs every Wednesday at 00:00 UTC
 async def weekly_refresh():
     """look at the list of upcoming CTFs and sends a message with 5 CTFs where the difficulty is within 20 to 40"""
 
