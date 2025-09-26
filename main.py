@@ -1,20 +1,23 @@
 import asyncio
 import hmac
-
-import requests as req
+import logging
+import sys
 import time as t
+from datetime import *
+from os import mkdir, rename
+from os import path as p
+from typing import Literal
+
+import discord.ext.commands
+import requests as req
 import uvicorn
+from discord import HTTPException
+from discord.ext import tasks
+from discord.ui import Button, View
+from discord.utils import get
 
 from bot_functions import *
 from settings import *
-from discord.ext import commands, tasks
-from discord.ui import Button, View
-from discord.utils import get
-from datetime import *
-from os import path as p
-from os import mkdir, rename
-from typing import Literal
-
 
 """CONFIGURATION LOADING"""
 
@@ -23,6 +26,8 @@ CTFREI = "__GOATS__"
 """INTERACTIONS' RELATED"""
 
 INTERACTION_SAVE_FILE = conf['INTERACTION_SAVE_FILE']
+
+
 def load_persistent_data():
     try:
         with open(INTERACTION_SAVE_FILE, "r") as f:
@@ -31,16 +36,21 @@ def load_persistent_data():
         print("Interaction save file not found.")
         return {}
 
+
 def save_persistent_data(data):
     with open(INTERACTION_SAVE_FILE, "w") as f:
         json.dump(data, f)
 
+
 persistent_data = load_persistent_data()
+logger = logging.getLogger('discord')
+
 
 class PersistentView(View):
     def __init__(self, role):
         super().__init__(timeout=None)
         self.add_item(RoleButton(role))
+
 
 class RoleButton(Button):
     def __init__(self, role):
@@ -56,36 +66,83 @@ class RoleButton(Button):
             await interaction.response.send_message(f"Vous avez déjà le rôle {self.role.name}.", ephemeral=True)
 
 
-
-
-"""ROLE DETECTION"""
 # @bot.event
-# async def on_member_update(before: discord.Member, after: discord.Member):
-@bot.tree.command(name="memberize", description="Fais de l'utilisateur spécifié un membre (sur CTFd aussi).", guild=discord.Object(id=DISCORD_GUILD_ID))
+# async def on_user_update(before: discord.User, after: discord.User):
+#     logger.info(f"User update: {before.name}#{before.discriminator} -> {after.name}#{after.discriminator}")
+
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    logger.info(f"Member update: {before.name}. Let's check roles...")
+    # check if "Membre" role was added or removed
+    before_roles = set(before.roles)
+    after_roles = set(after.roles)
+    if before_roles != after_roles:
+        guild = after.guild
+        role = discord.utils.get(guild.roles, name="Membre")
+        if role is None:
+            logger.warning("Role 'Membre' not found in guild.")
+            return
+
+        if role in after_roles and role not in before_roles:
+            # Role was added
+            new_state = True
+        elif role not in after_roles and role in before_roles:
+            # Role was removed
+            new_state = False
+        else:
+            return
+
+        await sync_members()
+        payload = {
+            "new_state": new_state
+        }
+        logger.info(f"Updating membership for {after.name} to {new_state}")
+        res = req.patch(
+            f"http://ctfd-ctfd-1:8000/plugins/ctfrei_registration/update_role/{after.name}",
+            headers={
+                "X-Signature": hmac.new(
+                    WEBHOOK_SECRET.encode(),
+                    json.dumps(payload).encode("utf-8"),
+                    hashlib.sha256
+                ).hexdigest()
+            },
+            json=payload
+        )
+        logger.info(f"\twith status code {res.status_code}")
+        if res.status_code == 401:
+            logger.error("Invalid signature when updating role on CTFd.")
+        elif res.status_code == 404:
+            logger.warning(f"User {after.name} not found on CTFd.")
+        else:
+            res_json = res.json()
+            if not res_json.get("changed", False):
+                logger.info(f"User {after.name} role was already up to date on CTFd.")
+            else:
+                logger.info(f"User {after.name} role updated successfully on CTFd.")
+
+
+"""MEMBERIZE"""
+@bot.tree.command(name="memberize", description="Fais de l'utilisateur spécifié un membre (sur CTFd aussi).",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 @commands.has_permissions(manage_roles=True)
 async def memberize(ctx: discord.Interaction, user: discord.Member):
-    # before_roles = set(before.roles)
-    # after_roles = set(after.roles)
-    # removed = before_roles - after_roles
-    # if removed:
-    #     for role in removed:
-    #         if role.name == "Membre":
-    #             payload["new_state"] = False
-    #             print("Revoking", end=" ")
-
     guild = ctx.guild
     role = discord.utils.get(guild.roles, name="Membre")
     if role is None:
         await ctx.response.send_message("Pas de role 'Membre' !")
         return
 
-    await user.add_roles(role, reason=f"membrisé par {ctx.user.name}")
+    try:
+        await user.add_roles(role, reason=f"membrisé par {ctx.user.name}")
+    except HTTPException:
+        await ctx.response.send_message("Erreur lors de l'ajout du rôle.")
+        return
 
     payload = {
         "new_state": True
     }
-    print(f"Giving membership for {user.name}", end=" ")
-    req.patch(
+    logger.info(f"Giving membership for {user.name}")
+    res = req.patch(
         f"http://ctfd-ctfd-1:8000/plugins/ctfrei_registration/update_role/{user.name}",
         headers={
             "X-Signature": hmac.new(
@@ -97,12 +154,30 @@ async def memberize(ctx: discord.Interaction, user: discord.Member):
         json=payload
     )
 
-    await ctx.response.send_message(f"{user.name} est maintenant membre.", ephemeral=True)
+    logger.info(f"\twith status code {res.status_code}")
+    if res.status_code == 401:
+        await ctx.response.send_message("Erreur lors de la mise à jour du rôle sur le CTFd (signature invalide).",
+                                        ephemeral=True)
+        return
+
+    answer_msg = f"{user.name} est maintenant membre."
+    if res.status_code == 404:
+        answer_msg += "\nCependant, l'utilisateur n'existe pas sur le CTFd."
+    else:
+        res_json = res.json()
+        if not res_json.get("changed", False):
+            answer_msg += "\nCependant, l'utilisateur était déjà membre sur le CTFd (???)."
+        else:
+            answer_msg += "\nL'utilisateur a également été mis à jour sur le CTFd."
+
+    await ctx.response.send_message(answer_msg, ephemeral=True)
 
 
 """CTFTIME COMMANDS (CTFTIME API): FILE MODIFICATION"""
 
-@bot.tree.command(name="quickadd", description="Ajoute un évènement au serveur (CTFTIME only).", guild=discord.Object(id=DISCORD_GUILD_ID))
+
+@bot.tree.command(name="quickadd", description="Ajoute un évènement au serveur (CTFTIME only).",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf_name: str):
     """add an event to the current events on a server, needs a role name (str) and a ctf name (that can be checked using /search)"""
 
@@ -111,10 +186,13 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
     # tries to find the ctf, if not found it'll stop the program
     CTF_EVENT = await search_ctf_data(filename=UPCOMING_CTFTIME_FILE, query=ctf_name, WEIGHT_RANGE=WEIGHT_RANGE_GENERAL)
     if not CTF_EVENT:
-        await ctx.response.send_message("Erreur: Aucun CTF ne correspond. Utilise /search pour vérifier le nom de ton CTF.", ephemeral=True)
+        await ctx.response.send_message(
+            "Erreur: Aucun CTF ne correspond. Utilise /search pour vérifier le nom de ton CTF.", ephemeral=True)
         return None
     elif len(CTF_EVENT) > 1:
-        await ctx.response.send_message("Erreur: Plus d'un CTF correspond à ce nom. Utilise /search pour t'assurer que tu n'ajoutes qu'un seul CTF.", ephemeral=True)
+        await ctx.response.send_message(
+            "Erreur: Plus d'un CTF correspond à ce nom. Utilise /search pour t'assurer que tu n'ajoutes qu'un seul CTF.",
+            ephemeral=True)
         return None
 
     try:
@@ -127,18 +205,18 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
         current = datetime.now().timestamp()
         timeout_timer = end_time - current  # Calculate time remaining until end for interaction
     except ValueError:
-        await ctx.response.send_message('Erreur pendant la récupération des données. Si cela continue, contacte un administrateur.', ephemeral=True)
+        await ctx.response.send_message(
+            'Erreur pendant la récupération des données. Si cela continue, contacte un administrateur.', ephemeral=True)
         return 1
 
-
     """CHECK FOR ALREADY EXISTING DATA (if there is, stop function and return error)"""
-
 
     try:
         event_id = generate_unique_id(str(CTF_EVENT[0]['title']))  # To avoid duplicates with different roles
         for event in current_events:
             if event_id in event:
-                await ctx.response.send_message("L'évènement semble déjà être enregistré sur ce serveur, verifie avec /listevents.", ephemeral=True)
+                await ctx.response.send_message(
+                    "L'évènement semble déjà être enregistré sur ce serveur, verifie avec /listevents.", ephemeral=True)
                 return None
 
         CTF_EVENT = CTF_EVENT[0]  # Select the data of the event
@@ -148,17 +226,18 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
             return None
 
         if ctfChannel:
-            await ctx.response.send_message(f"Il existe déjà un salon avec ce nom ici {ctfChannel.mention}", ephemeral=True)
+            await ctx.response.send_message(f"Il existe déjà un salon avec ce nom ici {ctfChannel.mention}",
+                                            ephemeral=True)
             return None
     except ValueError:
         await ctx.response.send_message('Erreur pendant la récupération des données.', ephemeral=True)
         return 1
 
-
     """Check if event is over (for interaction mostly)"""
 
     if timeout_timer < 0:
-        await ctx.response.send_message(f"L'évènement semble déjà être terminé ({CTF_EVENT['finish'][:10:]})", ephemeral=True)
+        await ctx.response.send_message(f"L'évènement semble déjà être terminé ({CTF_EVENT['finish'][:10:]})",
+                                        ephemeral=True)
         return None
 
     """ALL THE CHECKS PASSED: CREATING ALL THE ROLES AND CHANNELS"""
@@ -176,11 +255,13 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
 
     # Send the message with the button
     try:
-        join_message = await join_channel.send(f"{CTF_EVENT['title']} à été ajouter aux évènements ici {private_channel.mention}", view=view)
-        message_link = f"https://discord.com/channels/{ctx.guild.id}/{CTF_JOIN_CHANNEL[ctx.guild.name]}/{join_message.id}" # will be linked in the response
+        join_message = await join_channel.send(
+            f"{CTF_EVENT['title']} à été ajouter aux évènements ici {private_channel.mention}", view=view)
+        message_link = f"https://discord.com/channels/{ctx.guild.id}/{CTF_JOIN_CHANNEL[ctx.guild.name]}/{join_message.id}"  # will be linked in the response
 
-        persistent_data[str(join_message.id)] = {"role_id": role.id, "finish": CTF_EVENT['finish']} # to keep the interaction going
-        save_persistent_data(persistent_data) # add the interaction to the save file
+        persistent_data[str(join_message.id)] = {"role_id": role.id,
+                                                 "finish": CTF_EVENT['finish']}  # to keep the interaction going
+        save_persistent_data(persistent_data)  # add the interaction to the save file
 
     except ValueError:
         await ctx.response.send_message("Erreur lors de la création du message pour rejoindre.", ephemeral=True)
@@ -218,39 +299,47 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
         await ctx.response.send_message("Erreur lors de la sauvegarde des données.", ephemeral=True)
         return 1
 
-
     """SEND THE ANNOUNCEMENT"""
     announce_data = CTF_ANNOUNCE_CHANNEL[ctx.guild.name]
     announce_channel = await ctx.guild.fetch_channel(announce_data['channel_id'])
     announce_role = discord.utils.get(ctx.guild.roles, id=announce_data["role_id"])
-    duration = (int(event_info['duration']['days'])*24) + (event_info['duration']['hours'])
+    duration = (int(event_info['duration']['days']) * 24) + (event_info['duration']['hours'])
 
     # Set up the embedded message
     color = discord.Color.red()
     embeded_message = discord.Embed(
         title=f"__{event_info['title']}__",
-        description=f"Salut {announce_role.mention} ! <:xxxxxxd:1312187847217909770>\n **{event_info['title']}** à été ajouté sur le serveur ! \n\nRécupérez le rôle {role.mention} pour avoir accès au salon dédié.", # french version (cocorico)
+        description=f"Salut {announce_role.mention} ! <:xxxxxxd:1312187847217909770>\n **{event_info['title']}** à été ajouté sur le serveur ! \n\nRécupérez le rôle {role.mention} pour avoir accès au salon dédié.",
+        # french version (cocorico)
         color=color
     )
 
-    embeded_message.set_author(name="CTFREI BOT",icon_url="https://www.efrei.fr/wp-content/uploads/2024/07/ctefrei.png")
+    embeded_message.set_author(name="CTFREI BOT",
+                               icon_url="https://www.efrei.fr/wp-content/uploads/2024/07/ctefrei.png")
 
-    embeded_message.add_field(name="**Informations:**", value=f":date: Du <t:{int((datetime.fromisoformat(event_info['start'])).timestamp())}:F> au <t:{int((datetime.fromisoformat(event_info['finish'])).timestamp())}:F>\n:alarm_clock: dure {duration} heures au total\n:man_lifting_weights: Weight estimé {event_info['weight'] if int(event_info['weight']) != 0 else 'inconnu'}", inline=True)
+    embeded_message.add_field(name="**Informations:**",
+                              value=f":date: Du <t:{int((datetime.fromisoformat(event_info['start'])).timestamp())}:F> au <t:{int((datetime.fromisoformat(event_info['finish'])).timestamp())}:F>\n:alarm_clock: dure {duration} heures au total\n:man_lifting_weights: Weight estimé {event_info['weight'] if int(event_info['weight']) != 0 else 'inconnu'}",
+                              inline=True)
 
-    embeded_message.add_field(name="**URI links:**", value=f"<:ctftime:1320354001287647264> [CTFTIME]({event_info['ctftime_url']})\n<:site:1320352422056693821> [CTFd]({event_info['url']})\n", inline=False)
+    embeded_message.add_field(name="**URI links:**",
+                              value=f"<:ctftime:1320354001287647264> [CTFTIME]({event_info['ctftime_url']})\n<:site:1320352422056693821> [CTFd]({event_info['url']})\n",
+                              inline=False)
 
-    embeded_message.add_field(name="**Channel & role:**", value=f"<:logo_ctfrei:1167954970889441300> {message_link}", inline=False)
+    embeded_message.add_field(name="**Channel & role:**", value=f"<:logo_ctfrei:1167954970889441300> {message_link}",
+                              inline=False)
 
-    embeded_message.set_image(url="https://cdn.discordapp.com/attachments/1167256768087343256/1202189774836731934/CTFREI_Banniere_920_x_240_px_1.png?ex=67162479&is=6714d2f9&hm=c649d21b2152c0200b9466a29c09a04865387410258c1c228c8df58db111c539&")
+    embeded_message.set_image(
+        url="https://cdn.discordapp.com/attachments/1167256768087343256/1202189774836731934/CTFREI_Banniere_920_x_240_px_1.png?ex=67162479&is=6714d2f9&hm=c649d21b2152c0200b9466a29c09a04865387410258c1c228c8df58db111c539&")
 
     if event_info['logo']:
         embeded_message.set_thumbnail(url=event_info['logo'])
 
-    announce_message = await announce_channel.send(f"||{announce_role.mention}||",embed=embeded_message, view=view) # send the announce message with the button (view)
+    announce_message = await announce_channel.send(f"||{announce_role.mention}||", embed=embeded_message,
+                                                   view=view)  # send the announce message with the button (view)
 
-    persistent_data[str(announce_message.id)] = {"role_id": role.id, "finish": CTF_EVENT['finish']} # create the entry for the interaction (persistence post restart)
-    save_persistent_data(persistent_data) # save it
-
+    persistent_data[str(announce_message.id)] = {"role_id": role.id, "finish": CTF_EVENT[
+        'finish']}  # create the entry for the interaction (persistence post restart)
+    save_persistent_data(persistent_data)  # save it
 
     """OTHER: SEND THE EVENT DATA TO THE NEW CHANNEL"""
 
@@ -259,7 +348,9 @@ async def add_reaction_and_channel(ctx: discord.Interaction, role_name: str, ctf
     await ctx.response.send_message(f"l'évènement à été ajouter avec succès ici : {message_link}", ephemeral=True)
     return None
 
-@bot.tree.command(name="refresh", description="Une commande pour rafraichir la liste des CTFs de CTFTIME.", guild=discord.Object(id=DISCORD_GUILD_ID))
+
+@bot.tree.command(name="refresh", description="Une commande pour rafraichir la liste des CTFs de CTFTIME.",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def refresh_data(ctx: discord.Interaction):
     """refresh the list of upcoming CTFs (using CTFtime API's, reload up to 100 events)"""
     try:
@@ -275,23 +366,17 @@ async def refresh_data(ctx: discord.Interaction):
         return 1
 
 
-
-
-
-
-
-
-
-
 """SEARCHING COMMANDS (GENERAL): NO FILE MODIFICATION"""
 
-@bot.tree.command(name="upcoming", description="Liste les prochains CTF à venir.", guild=discord.Object(id=DISCORD_GUILD_ID))
+
+@bot.tree.command(name="upcoming", description="Liste les prochains CTF à venir.",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def upcoming_ctf(ctx: discord.Interaction, max_events: int = MAX_EVENT_LIMIT):
     """List X number of the upcoming CTFs based on the UPCOMING file's content"""
 
     """Retrieve data from UPCOMING file"""
     if max_events and ((max_events > 25) or (max_events < 1)):
-        max_events = 25 # set a limit to 25, above the response will crash.
+        max_events = 25  # set a limit to 25, above the response will crash.
 
     try:
         with open(UPCOMING_CTFTIME_FILE) as data_file:
@@ -301,17 +386,16 @@ async def upcoming_ctf(ctx: discord.Interaction, max_events: int = MAX_EVENT_LIM
         return 1
 
     embeded_message = discord.Embed(
-            title="Les CTF à venir",  # Title of the embed
-            description="Voici la liste des CTF à venir de CTFTIME",  # Description of the embed
-            color=discord.Color.blue()  # Color of the side bar (you can change the color)
-        )
+        title="Les CTF à venir",  # Title of the embed
+        description="Voici la liste des CTF à venir de CTFTIME",  # Description of the embed
+        color=discord.Color.blue()  # Color of the side bar (you can change the color)
+    )
 
     try:
-        count = 0 # variable to limit the amount of output per message (discord limits)
+        count = 0  # variable to limit the amount of output per message (discord limits)
         for event in events:
             if event['location'] == '':
-
-                event_info = f"Weight: {event['weight']} | {event['format']} | starts : <t:{int((datetime.fromisoformat(event['start'])).timestamp())}:R>" # format for the output of the CTF upcoming lists for each event
+                event_info = f"Weight: {event['weight']} | {event['format']} | starts : <t:{int((datetime.fromisoformat(event['start'])).timestamp())}:R>"  # format for the output of the CTF upcoming lists for each event
                 embeded_message.add_field(name=event['title'], value=event_info, inline=False)
 
                 count += 1
@@ -321,15 +405,20 @@ async def upcoming_ctf(ctx: discord.Interaction, max_events: int = MAX_EVENT_LIM
     except ValueError:
         ctx.response.send_message("Erreur lors de la lecture de la liste des évènements.", ephemeral=True)
         return 1
-    embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=AUTHOR_ICON)
-    embeded_message.set_footer(text="Pour plus d'évènement utiliser /upcoming {number}\nVous pouvez également en apprendre plus sur un évènement avec la commande /search {nom de l'évènement}", icon_url=FOOTER_ICON)
+    embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming",
+                               icon_url=AUTHOR_ICON)
+    embeded_message.set_footer(
+        text="Pour plus d'évènement utiliser /upcoming {number}\nVous pouvez également en apprendre plus sur un évènement avec la commande /search {nom de l'évènement}",
+        icon_url=FOOTER_ICON)
 
     embeded_message.set_thumbnail(url=optional_thumbnail)
 
     await ctx.response.send_message(embed=embeded_message, ephemeral=True)
     return None
 
-@bot.tree.command(name="listevents", description="Liste tout les CTFs actifs sur le serveur.", guild=discord.Object(id=DISCORD_GUILD_ID))
+
+@bot.tree.command(name="listevents", description="Liste tout les CTFs actifs sur le serveur.",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def list_registered_events(ctx: discord.Integration):
     """list all the files in the current events directory and prints some info"""
     try:
@@ -342,54 +431,59 @@ async def list_registered_events(ctx: discord.Integration):
         for individual_event in current_events:
             with open(f"{CURRENT_CTF_DIR}{ctx.guild.id}/{individual_event}") as individual_event_file:
                 temp = json.load(individual_event_file)
-                full_data = [temp['title'], temp['weight'], temp['start'][:10:], temp['url'], temp['channelID'], temp['join_message_id'], temp['role_name'], temp['event_id'], temp['logo']]
+                full_data = [temp['title'], temp['weight'], temp['start'][:10:], temp['url'], temp['channelID'],
+                             temp['join_message_id'], temp['role_name'], temp['event_id'], temp['logo']]
                 events_data.append(full_data)
     except ValueError:
         await ctx.response.send_message('Erreur lors de la récupération des données.', ephemeral=True)
         return 1
 
-
     embeded_message = discord.Embed(
-            title="Évènement CTF en cours",
-            description="Voici la liste des CTFs actuellement en cours sur le serveur.",
-            color=discord.Color.dark_grey()  # Color of the side bar (you can change the color)
-        )
+        title="Évènement CTF en cours",
+        description="Voici la liste des CTFs actuellement en cours sur le serveur.",
+        color=discord.Color.dark_grey()  # Color of the side bar (you can change the color)
+    )
 
     try:
         for individual_event in events_data:
             event_chan = ctx.guild.get_channel(individual_event[4])
             message_link = f"https://discord.com/channels/{ctx.guild.id}/{CTF_JOIN_CHANNEL[ctx.guild.name]}/{individual_event[5]}"
-            event_info = f"Weight: {individual_event[1]} | commence: <t:{int((datetime.fromisoformat(individual_event[2])).timestamp())}:F> | Event ID: `{individual_event[7]}` | channel: {event_chan.mention} | {message_link}" # format for the output of the Currently registered CTF
+            event_info = f"Weight: {individual_event[1]} | commence: <t:{int((datetime.fromisoformat(individual_event[2])).timestamp())}:F> | Event ID: `{individual_event[7]}` | channel: {event_chan.mention} | {message_link}"  # format for the output of the Currently registered CTF
             embeded_message.add_field(name=individual_event[0], value=event_info, inline=False)
     except ValueError:
         await ctx.response.send_message("Erreur lors de l'utilisation de la données.", ephemeral=True)
         return 1
 
-    embeded_message.set_footer(text="Vous pouvez en apprendre plus sur un certain évènement en cours en utilisant /registered_search {eventID}", icon_url=FOOTER_ICON)
+    embeded_message.set_footer(
+        text="Vous pouvez en apprendre plus sur un certain évènement en cours en utilisant /registered_search {eventID}",
+        icon_url=FOOTER_ICON)
 
     await ctx.response.send_message(embed=embeded_message, ephemeral=True)
     return None
 
-@bot.tree.command(name="search", description="Cherche à travers les CTFs à venir, peut chercher par nom (string) ou par difficulté (int).", guild=discord.Object(id=DISCORD_GUILD_ID))
+
+@bot.tree.command(name="search",
+                  description="Cherche à travers les CTFs à venir, peut chercher par nom (string) ou par difficulté (int).",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def search_json(ctx: discord.Interaction, query: str = None):
     """search the upcoming file for matches, can use integer for weight search, for strings for name/tag search"""
 
     if query is None:
-        await ctx.response.send_message(f"S'il vous plait ajouter une entrer: \n- **string** => cherche un évènement par nom/tag\n- **integer** => cherche un niveau de difficulté (marge de {WEIGHT_RANGE_GENERAL})", ephemeral=True)
+        await ctx.response.send_message(
+            f"S'il vous plait ajouter une entrer: \n- **string** => cherche un évènement par nom/tag\n- **integer** => cherche un niveau de difficulté (marge de {WEIGHT_RANGE_GENERAL})",
+            ephemeral=True)
         return None
 
     try:
         matches = await search_ctf_data(UPCOMING_CTFTIME_FILE, query, WEIGHT_RANGE_GENERAL)
         if not matches:
-            await ctx.response.send_message("Aucun évènement n'a pu être trouvé, vérifier si l'évènement n'est pas déjà enregistré avec /listevents, sinon vous pouvez utiliser /refresh pour raffraichir la liste ou /upcoming pour voir les prochains CTFs à venir.", ephemeral=True)
+            await ctx.response.send_message(
+                "Aucun évènement n'a pu être trouvé, vérifier si l'évènement n'est pas déjà enregistré avec /listevents, sinon vous pouvez utiliser /refresh pour raffraichir la liste ou /upcoming pour voir les prochains CTFs à venir.",
+                ephemeral=True)
             return None
     except ValueError:
         await ctx.response.send_message("Erreur pendant la recherche.", ephemeral=True)
         return 1
-
-
-
-
 
     if len(matches) == 1:
         matches = matches[0]  # if only one match, use the first element directly
@@ -403,15 +497,22 @@ async def search_json(ctx: discord.Interaction, query: str = None):
         if matches['logo']:
             embeded_message.set_thumbnail(url=matches['logo'])
 
-        embeded_message.add_field(name=f"**Informations :**", value=f":stopwatch: durée du CTF : {(int(matches['duration']['days'])*24) + (matches['duration']['hours'])} heures\n:man_lifting_weights: Weight estimé {matches['weight'] if int(matches['weight']) != 0 else 'inconnu'}", inline=True)
+        embeded_message.add_field(name=f"**Informations :**",
+                                  value=f":stopwatch: durée du CTF : {(int(matches['duration']['days']) * 24) + (matches['duration']['hours'])} heures\n:man_lifting_weights: Weight estimé {matches['weight'] if int(matches['weight']) != 0 else 'inconnu'}",
+                                  inline=True)
 
-        embeded_message.add_field(name="**URI links:**", value=f"<:ctftime:1320354001287647264> [CTFTIME]({matches['ctftime_url']})\n<:site:1320352422056693821> [CTFd]({matches['url']})\n", inline=True)
+        embeded_message.add_field(name="**URI links:**",
+                                  value=f"<:ctftime:1320354001287647264> [CTFTIME]({matches['ctftime_url']})\n<:site:1320352422056693821> [CTFd]({matches['url']})\n",
+                                  inline=True)
 
-        embeded_message.add_field(name="# **Dates:**", value=f":date: Du <t:{int((datetime.fromisoformat(matches['start'])).timestamp())}:F> au <t:{int((datetime.fromisoformat(matches['finish'])).timestamp())}:F>", inline=False)
+        embeded_message.add_field(name="# **Dates:**",
+                                  value=f":date: Du <t:{int((datetime.fromisoformat(matches['start'])).timestamp())}:F> au <t:{int((datetime.fromisoformat(matches['finish'])).timestamp())}:F>",
+                                  inline=False)
 
         embeded_message.add_field(name="**Description:**", value=f"{matches['description'][:1200:]}", inline=False)
 
-        embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=AUTHOR_ICON)
+        embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming",
+                                   icon_url=AUTHOR_ICON)
 
     else:
         embeded_message = discord.Embed(
@@ -419,8 +520,8 @@ async def search_json(ctx: discord.Interaction, query: str = None):
             description="Voici la liste des CTFs trouvés avec votre recherche.",
             color=discord.Color.greyple()  # Color of the side bar (you can change the color)
         )
-        try :
-            count = 0 # to limit output (avoid discord limit related crashes)
+        try:
+            count = 0  # to limit output (avoid discord limit related crashes)
             for event in matches:
                 if count < 12:
                     event_info = f"Weight: {event['weight']} | {event['format']} | Starts: <t:{int((datetime.fromisoformat(event['start'])).timestamp())}:F> => [CTFTIME]({event['ctftime_url']})\n"
@@ -432,15 +533,20 @@ async def search_json(ctx: discord.Interaction, query: str = None):
             await ctx.response.send_message("Erreur lors de la création de la réponse.", ephemeral=True)
             return 1
 
-        embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming", icon_url=AUTHOR_ICON)
-        embeded_message.set_footer(text="Vous pouvez en apprendre plus sur un certain évènement en utilisant /search {name of the event}", icon_url=FOOTER_ICON)
-
+        embeded_message.set_author(name="CTFTIME API DATA", url="https://ctftime.org/event/list/upcoming",
+                                   icon_url=AUTHOR_ICON)
+        embeded_message.set_footer(
+            text="Vous pouvez en apprendre plus sur un certain évènement en utilisant /search {name of the event}",
+            icon_url=FOOTER_ICON)
 
     await log(ctx, EVENT_LOG_FILE, f"GET: searched for {query}\n")
     await ctx.response.send_message(embed=embeded_message, ephemeral=True)
     return None
 
-@bot.tree.command(name="registered_search", description="Cherche dans la liste des évènements déjà enregistrés avec son ID.", guild=discord.Object(id=DISCORD_GUILD_ID))
+
+@bot.tree.command(name="registered_search",
+                  description="Cherche dans la liste des évènements déjà enregistrés avec son ID.",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def search_registered_events(ctx: discord.Integration, event_id: str):
     """search the directory for current events using its ID or associated role name"""
 
@@ -453,7 +559,9 @@ async def search_registered_events(ctx: discord.Integration, event_id: str):
                 full_data = json.load(individual_event_file)
 
     if not full_data:
-        await ctx.response.send_message(f"Aucun évènement avec l'ID {event_id} n'a pu être trouvé. Vous pouvez utiliser /listevents pour voir tout les évènements et leur ID.", ephemeral=True)
+        await ctx.response.send_message(
+            f"Aucun évènement avec l'ID {event_id} n'a pu être trouvé. Vous pouvez utiliser /listevents pour voir tout les évènements et leur ID.",
+            ephemeral=True)
         return None
 
     event_chan = ctx.guild.get_channel(CTF_JOIN_CHANNEL[ctx.guild.name])
@@ -472,14 +580,19 @@ async def search_registered_events(ctx: discord.Integration, event_id: str):
     embeded_message.set_author(name="CTF INFORMATION", url=full_data['url'], icon_url=AUTHOR_ICON)
     embeded_message.add_field(name="Weight", value=f"**{full_data['weight']}**", inline=True)
     embeded_message.add_field(name="Rejoindre ici:", value=f"{message_link}", inline=True)
-    embeded_message.add_field(name="Commence:", value=f"<t:{int((datetime.fromisoformat(full_data['start'])).timestamp())}:F>", inline=False)
-    embeded_message.add_field(name="Fini:", value=f"<t:{int((datetime.fromisoformat(full_data['finish'])).timestamp())}:F>", inline=True)
-    embeded_message.add_field(name="Liens CTF:", value=f"[CTFd]({full_data['url']})\n[CTFTIME]({full_data['ctftime_url']})", inline=False)
-
+    embeded_message.add_field(name="Commence:",
+                              value=f"<t:{int((datetime.fromisoformat(full_data['start'])).timestamp())}:F>",
+                              inline=False)
+    embeded_message.add_field(name="Fini:",
+                              value=f"<t:{int((datetime.fromisoformat(full_data['finish'])).timestamp())}:F>",
+                              inline=True)
+    embeded_message.add_field(name="Liens CTF:",
+                              value=f"[CTFd]({full_data['url']})\n[CTFTIME]({full_data['ctftime_url']})", inline=False)
 
     ctfrei_logo = "https://cdn.discordapp.com/attachments/1167256768087343256/1202189774836731934/CTFREI_Banniere_920_x_240_px_1.png?ex=67162479&is=6714d2f9&hm=c649d21b2152c0200b9466a29c09a04865387410258c1c228c8df58db111c539&"
 
-    embeded_message.set_thumbnail(url=full_data['logo']) if full_data['logo'] else embeded_message.set_thumbnail(url=ctfrei_logo)
+    embeded_message.set_thumbnail(url=full_data['logo']) if full_data['logo'] else embeded_message.set_thumbnail(
+        url=ctfrei_logo)
 
     embeded_message.set_image(url=ctfrei_logo)
 
@@ -488,21 +601,15 @@ async def search_registered_events(ctx: discord.Integration, event_id: str):
     return None
 
 
-
-
-
-
-
-
-
-
 """SEARCHING COMMANDS (CTFs channel): NO FILE MODIFICATION"""
 
-@bot.tree.command(name="info", description="Affiche les informations sur le CTF lié au channel actuel.", guild=discord.Object(id=DISCORD_GUILD_ID))
+
+@bot.tree.command(name="info", description="Affiche les informations sur le CTF lié au channel actuel.",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def get_info(ctx: discord.Interaction):
     """displays info on current channel's CTF"""
     try:
-        channel_id = ctx.channel.id # used for search
+        channel_id = ctx.channel.id  # used for search
         event_data = {}
         event_list = list_directory_contents(f"{CURRENT_CTF_DIR}{ctx.guild.id}")
         for event_file in event_list:
@@ -511,7 +618,9 @@ async def get_info(ctx: discord.Interaction):
                     event_data = json.load(data)
 
         if not event_data:
-            await ctx.response.send_message(f"Aucun évènement n'a pu être trouvé pour ce channel. Assurer vous que vous utilisez cette commande dans un salon dédié à un CTF. (/listevents)", ephemeral=True)
+            await ctx.response.send_message(
+                f"Aucun évènement n'a pu être trouvé pour ce channel. Assurer vous que vous utilisez cette commande dans un salon dédié à un CTF. (/listevents)",
+                ephemeral=True)
             return 1
 
         print(event_data)
@@ -523,11 +632,13 @@ async def get_info(ctx: discord.Interaction):
     await ctx.response.send_message(embed=embeded_message, ephemeral=True)
     return None
 
-@bot.tree.command(name="description", description="Affiche la description de l'évènement en cours (CTFTIME).", guild=discord.Object(id=DISCORD_GUILD_ID))
+
+@bot.tree.command(name="description", description="Affiche la description de l'évènement en cours (CTFTIME).",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def get_description(ctx: discord.integrations):
     """displays the description of the current channel's CTF"""
     try:
-        channel_id = ctx.channel.id # used for search
+        channel_id = ctx.channel.id  # used for search
         event_data = []
         event_list = list_directory_contents(f"{CURRENT_CTF_DIR}{ctx.guild.id}")
         for event_file in event_list:
@@ -535,36 +646,43 @@ async def get_description(ctx: discord.integrations):
                 with open(f"{CURRENT_CTF_DIR}{ctx.guild.id}/{event_file}", 'r') as data:
                     event_data = json.load(data)
         if not event_data:
-            await ctx.response.send_message(f"Aucun évènement n'a pu être trouvé pour ce channel. Assurer vous que vous utilisez cette commande dans un salon dédié à un CTF. (/listevents)", ephemeral=True)
+            await ctx.response.send_message(
+                f"Aucun évènement n'a pu être trouvé pour ce channel. Assurer vous que vous utilisez cette commande dans un salon dédié à un CTF. (/listevents)",
+                ephemeral=True)
             return 1
     except ValueError:
         await ctx.response.send_message("Erreur lors de la récupération de l'information.", ephemeral=True)
         return 1
     await log(ctx, EVENT_LOG_FILE, f"GET: Event description for {event_data['title']}\n")
-    await ctx.response.send_message(f"Voici la description de **{event_data['title']}**:\n{event_data['description']}", ephemeral=True)
+    await ctx.response.send_message(f"Voici la description de **{event_data['title']}**:\n{event_data['description']}",
+                                    ephemeral=True)
     return None
 
 
-@bot.tree.command(name="end", description="Termine et archive le CTF actuelle (uniquement quand il est terminé sur CTFTIME).", guild=discord.Object(id=DISCORD_GUILD_ID))
+@bot.tree.command(name="end",
+                  description="Termine et archive le CTF actuelle (uniquement quand il est terminé sur CTFTIME).",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
 async def end_event(ctx: discord.integrations):
     """Moves the CTF file and channel to the archive, effectively stopping it from beeing seen as currently running"""
 
     """retrieve the data"""
     try:
-        full_file_path = "" # keep or will crash if no file found
+        full_file_path = ""  # keep or will crash if no file found
         ARCHIVE_CATEGORY = conf['ARCHIVE_CATEGORY'][ctx.guild.name]
-        channel_id = ctx.channel.id # used for search
+        channel_id = ctx.channel.id  # used for search
         event_list = list_directory_contents(f"{CURRENT_CTF_DIR}{ctx.guild.id}")
         for event_file in event_list:
             if str(channel_id) in event_file:
-                full_file_path= f"{CURRENT_CTF_DIR}{ctx.guild.id}/{event_file}"
+                full_file_path = f"{CURRENT_CTF_DIR}{ctx.guild.id}/{event_file}"
 
                 with open(f"{CURRENT_CTF_DIR}{ctx.guild.id}/{event_file}", 'r') as data:
                     data = json.load(data)
 
                 break
         if not full_file_path:
-            await ctx.response.send_message(f"Aucun évènement n'a pu être trouvé pour ce channel. Assurer vous que vous utilisez cette commande dans un salon dédié à un CTF (/listevents) et que le CTF n'a pas déjà été terminé.  ", ephemeral=True)
+            await ctx.response.send_message(
+                f"Aucun évènement n'a pu être trouvé pour ce channel. Assurer vous que vous utilisez cette commande dans un salon dédié à un CTF (/listevents) et que le CTF n'a pas déjà été terminé.  ",
+                ephemeral=True)
             return 1
 
         """Check if the event is actually over"""
@@ -572,8 +690,9 @@ async def end_event(ctx: discord.integrations):
         end_time = datetime.fromisoformat(data['finish']).timestamp()
         current = datetime.now().timestamp()
 
-        if end_time > current: # event is not over
-            await ctx.response.send_message(f"L'évènement n'est pas encore terminé selon les informations CTFTIME récupérées.", ephemeral=True)
+        if end_time > current:  # event is not over
+            await ctx.response.send_message(
+                f"L'évènement n'est pas encore terminé selon les informations CTFTIME récupérées.", ephemeral=True)
             return 1
 
         """Move the file to PAST and move discord channel to the archive (optionnal)"""
@@ -591,10 +710,6 @@ async def end_event(ctx: discord.integrations):
     except ValueError:
         await ctx.response.send_message("Erreur lors de la récupération d'information.", ephemeral=True)
         return 1
-
-
-
-
 
 
 """ TRASH COMMAND TO BE REBUILT LATER"""
@@ -644,17 +759,13 @@ lance un message embedded dans le salon avec des émojis ou des bouttons pour vo
 
 """
 
-
-
-
-
-
 """HELP"""
+
+
 @bot.tree.command(name="help", description="Help command.", guild=discord.Object(id=DISCORD_GUILD_ID))
-async def event_summary(ctx: discord.Interaction, commands: Literal["memberize", "listevents", "upcoming", "refresh", "search", "registered_search", "quickadd", "info, description, vote, end"]):
-
-
-    error_server="Si la commande ne répond pas il s'agit surement d'une erreur serveur.\nSVP contacter un admin pour qu'il puisse vérifier."
+async def event_summary(ctx: discord.Interaction, commands: Literal[
+    "memberize", "listevents", "upcoming", "refresh", "search", "registered_search", "quickadd", "info, description, vote, end"]):
+    error_server = "Si la commande ne répond pas il s'agit surement d'une erreur serveur.\nSVP contacter un admin pour qu'il puisse vérifier."
 
     if commands == "memberize":
         com = "Memberize"
@@ -677,7 +788,7 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["memberize",
 
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
     elif commands == "listevents":
-        com="Listevents"
+        com = "Listevents"
         embeded_message = discord.Embed(
             title=f"__{com}__",
             description=f"{com} est une commande pour afficher les évènements actuellement disponible sur le serveur.\nelle informe l'utilisateur :\n- le weight (difficulter de l'évènement selon CTFTIME de 0 à 100)\n- Quand l'évènement commence\n- Son ID (spécifique au Bot CTFREI pour /registered_search)\n- Le salon d'évènement et le lien du message pour rejoindre si jamais vous n'avez pas accès au salon.",
@@ -698,7 +809,7 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["memberize",
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
 
     elif commands == "upcoming":
-        com="Upcoming"
+        com = "Upcoming"
         embeded_message = discord.Embed(
             title=f"__{com}__",
             description=f"{com} est une commande pour afficher les X (par défaut {MAX_EVENT_LIMIT}) prochains évènements CTFs à venir selon CTFTIME .\nIl récupère les informations à partir d'un fichier cache qui est mis à jour toutes les 24h (ou à chaque /refresh), et donne à l'utilisateur :\n- Le nom de l'évènement\n- Le Weight (difficulter de l'évènement selon CTFTIME de 0 à 100)\n- Le format de l'évènement\n- La date à laquelle le CTF commence.",
@@ -715,12 +826,14 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["memberize",
         embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
-        embeded_message.add_field(name=f"**{com}** Description des Options ", value=f"Cette valeur défini le nombre totale d'évènement à afficher.\nLa valeur par défaut est {MAX_EVENT_LIMIT} et le maximum est 25.", inline=False)
+        embeded_message.add_field(name=f"**{com}** Description des Options ",
+                                  value=f"Cette valeur défini le nombre totale d'évènement à afficher.\nLa valeur par défaut est {MAX_EVENT_LIMIT} et le maximum est 25.",
+                                  inline=False)
 
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
 
     elif commands == "refresh":
-        com="Refresh"
+        com = "Refresh"
         embeded_message = discord.Embed(
             title=f"__{com}__",
             description=f"{com} est une commande qui permet de raffraichir le fichier cache contenant tout les CTFs de CTFTIME.\nCette function est lancé automatiquement toute les 24h mais vous pouvez toujours la lancer si besoin.",
@@ -741,7 +854,7 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["memberize",
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
 
     elif commands == "search":
-        com="Search"
+        com = "Search"
         embeded_message = discord.Embed(
             title=f"__{com}__",
             description=f"{com} est une commande pour récupérer les informations sur les __PROCHAINS__ CTFs.\nCette commande prend 2 forme de queries, elle peut chercher à partir d'un nom/mot, ou utiliser un chiffre pour chercher par difficulté (la marge est de {WEIGHT_RANGE_GENERAL}), Le resultat est sous forme de liste.",
@@ -758,13 +871,17 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["memberize",
         embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
-        embeded_message.add_field(name=f"**{com}** Description des Options", value=f"La **recherche par nom/mots** est une simple recherche par string (non case sensitive).\n\nLa **recherche par weight** utiliser une portée de recherche comme marge (par défaut {WEIGHT_RANGE_GENERAL}) ce qui permet de lister les prochains évènements à travers un éventail de difficulté, par exemple si vous chercher avec le weight \"20\" vous obtiendrez une liste d'évènement entre {0 if (16-WEIGHT_RANGE_GENERAL<0) else (16-WEIGHT_RANGE_GENERAL)} and {100 if (16+WEIGHT_RANGE_GENERAL>=100) else (16+WEIGHT_RANGE_GENERAL)}.", inline=False)
-        embeded_message.add_field(name=f"**{com}** Information des Options", value="Pour la recherche par nom/mot le string doit être d'au moins 3 charactères de long.\nPour la recherche par weight, le nom doit être au maximum de 2 unités (0-99) et ne doit pas être un float.", inline=False)
+        embeded_message.add_field(name=f"**{com}** Description des Options",
+                                  value=f"La **recherche par nom/mots** est une simple recherche par string (non case sensitive).\n\nLa **recherche par weight** utiliser une portée de recherche comme marge (par défaut {WEIGHT_RANGE_GENERAL}) ce qui permet de lister les prochains évènements à travers un éventail de difficulté, par exemple si vous chercher avec le weight \"20\" vous obtiendrez une liste d'évènement entre {0 if (16 - WEIGHT_RANGE_GENERAL < 0) else (16 - WEIGHT_RANGE_GENERAL)} and {100 if (16 + WEIGHT_RANGE_GENERAL >= 100) else (16 + WEIGHT_RANGE_GENERAL)}.",
+                                  inline=False)
+        embeded_message.add_field(name=f"**{com}** Information des Options",
+                                  value="Pour la recherche par nom/mot le string doit être d'au moins 3 charactères de long.\nPour la recherche par weight, le nom doit être au maximum de 2 unités (0-99) et ne doit pas être un float.",
+                                  inline=False)
 
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
 
     elif commands == "registered_search":
-        com="Registered_search"
+        com = "Registered_search"
         embeded_message = discord.Embed(
             title=f"__{com}__",
             description=f"{com} est une commande pour récupérer plus d'information sur des CTFs __en cours__ et enregistrés sur le serveur\nElle peut prendre en entrer l'ID de l'évènement (/listevents pour les voir), vous pouvez aussi lui donner le nom du role associé à l'évènement.",
@@ -785,7 +902,7 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["memberize",
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
 
     elif commands == "quickadd":
-        com="Quickadd"
+        com = "Quickadd"
         embeded_message = discord.Embed(
             title=f"__{com}__",
             description=f"{com} est la commande pour ajouter des évènements au serveur à partir des informations CTFTIME.\nPour enregistrer un nouvelle évènement vous aurez besoin de :\n- Donner le nom du CTF comme il est écrit sur CTFTIME, comme c'est montré dans la sortie de `/upcoming`.\n- de créer un nom pour le role qui sera utilisé.",
@@ -821,7 +938,7 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["memberize",
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
 
     elif commands == "info, description, vote, end":
-        com='"info", "description", ~~"vote"~~ and "end" commands'
+        com = '"info", "description", ~~"vote"~~ and "end" commands'
         embeded_message = discord.Embed(
             title=f"__{com}__",
             description=f"{com} sont des commandes utilisées pour voir et gérer des salons CTF dédiés (ceux créés par le Bot), ces commandes peuvent **uniquement** être lancer à l'intérieur de salon CTF en cours, ces salons sont listés dans /listevents.",
@@ -838,42 +955,41 @@ async def event_summary(ctx: discord.Interaction, commands: Literal["memberize",
         embeded_message.set_footer(text=error_server, icon_url=FOOTER_ICON)
         embeded_message.add_field(name=f"**{com}** Format de Commande ", value=format, inline=False)
         embeded_message.add_field(name=f"**{com}** Exemple de Commande", value=usage_exemple, inline=False)
-        embeded_message.add_field(name=f"**{com}** Information Importante", value="Ces commandes marche uniquement pour les évènement encore en cours, créés par le Bot et qui n'ont pas été archivés avec la commande /end", inline=False)
+        embeded_message.add_field(name=f"**{com}** Information Importante",
+                                  value="Ces commandes marche uniquement pour les évènement encore en cours, créés par le Bot et qui n'ont pas été archivés avec la commande /end",
+                                  inline=False)
 
         await ctx.response.send_message(embed=embeded_message, ephemeral=True)
     else:
-        await ctx.response.send_message("Utilise cette commande pour en apprendre plus sur les différentes commandes du Bot.", ephemeral=True)
-
-
-
-
-
-
-
-
+        await ctx.response.send_message(
+            "Utilise cette commande pour en apprendre plus sur les différentes commandes du Bot.", ephemeral=True)
 
 
 """BOT INITIAL SETUP, RESTART, SYNC, AND LOOP FUNCTIONS"""
 
-@bot.command(name="setup-ctfrei") # run /setup-ctfrei first time the bot is on a server (will setup file directories for said server)
+
+@bot.command(
+    name="setup-ctfrei")  # run /setup-ctfrei first time the bot is on a server (will setup file directories for said server)
 async def setup_dir(ctx: discord.integrations):
     """setup command for each server to setup the file system (does not appear as an actual command on servers)"""
-    if not p.isdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}"): # create server's dedicated dir in current
+    if not p.isdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}"):  # create server's dedicated dir in current
         mkdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}")
         print(f"Discord CTF dir ({CURRENT_CTF_DIR}{ctx.guild.id}) has been created ")
 
-    if not p.isdir(f"{PAST_CTF_DIR}{ctx.guild.id}"): # create server's dedicated dir in past
+    if not p.isdir(f"{PAST_CTF_DIR}{ctx.guild.id}"):  # create server's dedicated dir in past
         mkdir(f"{PAST_CTF_DIR}{ctx.guild.id}")
         print(f"Discord CTF dir ({PAST_CTF_DIR}{ctx.guild.id}) has been created ")
 
-    print(f"\nSERVER INFORMATIONS:\n\nServer: {ctx.guild.name}\nServer ID: {ctx.guild.id}\nCurrent Channel: {ctx.channel.id}\nCurrent Category: {ctx.channel.category.id}")
+    print(
+        f"\nSERVER INFORMATIONS:\n\nServer: {ctx.guild.name}\nServer ID: {ctx.guild.id}\nCurrent Channel: {ctx.channel.id}\nCurrent Category: {ctx.channel.category.id}")
 
-
-    if p.isdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}") and p.isdir(f"{PAST_CTF_DIR}{ctx.guild.id}") and p.isfile(UPCOMING_CTFTIME_FILE):
+    if p.isdir(f"{CURRENT_CTF_DIR}{ctx.guild.id}") and p.isdir(f"{PAST_CTF_DIR}{ctx.guild.id}") and p.isfile(
+            UPCOMING_CTFTIME_FILE):
         return 0
     else:
         print("something went wrong during the setup")
         return 1
+
 
 @bot.tree.command(name="sync", description="commande pour sync les commandes (dev only)")
 async def sync(ctx: discord.Interaction):
@@ -884,10 +1000,11 @@ async def sync(ctx: discord.Interaction):
     await refresh_interactions(ctx.guild.id, CTF_JOIN_CHANNEL[ctx.guild.name])
     await ctx.edit_original_response(content="Commands & interactions synced successfully!")
 
+
 async def refresh_interactions(discord_guild_id, Channels_id):
     """function to refresh the interactions that are not expired post restart"""
     if persistent_data:
-        found= [] # To keep track of messages that were found
+        found = []  # To keep track of messages that were found
         not_found = []  # To keep track of messages that were not found
         for channel_id in Channels_id:
             guild = bot.get_guild(discord_guild_id)  # The server to refresh
@@ -902,7 +1019,7 @@ async def refresh_interactions(discord_guild_id, Channels_id):
                     current = datetime.now().timestamp()
                     timeout_timer = end_time - current  # Calculate time remaining
 
-                    try :
+                    try:
                         message = await channel.fetch_message(int(message_id))
 
                     except discord.NotFound:
@@ -910,18 +1027,17 @@ async def refresh_interactions(discord_guild_id, Channels_id):
                         not_found.append(message_id)  # Keep track of not found messages
                         continue
 
-
                     # Check if the timeout has expired
                     if timeout_timer < 0:
                         # Delete the expired message's button and remove its record
                         # await message.delete() # this delete the whole message
-                        await message.edit(view=None) # this delete the button from the message
+                        await message.edit(view=None)  # this delete the button from the message
                         print(f"Le bouton de {message_id} à été supprimé car le CTF est terminé.")
                         del persistent_data[message_id]
                         save_persistent_data(persistent_data)
                         continue  # Skip further processing for this message if timer's out
 
-                    else: # the timer is still running
+                    else:  # the timer is still running
                         # Refresh the message with the new timeout
                         role = discord.utils.get(channel.guild.roles, id=data["role_id"])
                         if role:
@@ -931,11 +1047,11 @@ async def refresh_interactions(discord_guild_id, Channels_id):
                             print(f"Vue raffraichi pour {message_id} avec un timeout de {timeout_timer} secondes.")
                             found.append(message_id)  # Keep track of found messages
                         else:
-                            print(f"Le rôle {data['role_id']} n'a pas été trouvé dans le serveur {channel.guild.name} pour le message {message_id}.")
+                            print(
+                                f"Le rôle {data['role_id']} n'a pas été trouvé dans le serveur {channel.guild.name} pour le message {message_id}.")
                             not_found.append(message_id)
             else:
-                print(f"le salon avec l'id {channel_id} n'a pas été trouvé.")
-
+                logger.warning(f"le salon avec l'id {channel_id} n'a pas été trouvé.")
 
         # Remove any messages that were not found from persistent_data
         if not_found:
@@ -943,11 +1059,68 @@ async def refresh_interactions(discord_guild_id, Channels_id):
             for message_id in to_remove:
                 if message_id in persistent_data:
                     del persistent_data[message_id]
-                    print(f"Le message {message_id} à été supprimé des intéractions.")
+                    logger.info(f"Le message {message_id} à été supprimé des intéractions.")
             if to_remove:
                 save_persistent_data(persistent_data)
     else:
-        print("Aucune interaction à raffraichir n'a été trouvé.")
+        logger.info("Aucune interaction à raffraichir n'a été trouvé.")
+
+
+async def sync_members():
+    """sync members from discord to CTFd every 1 minute"""
+    """syncs their status AND their discord name"""
+    guild = bot.get_guild(DISCORD_GUILD_ID)
+    if not guild:
+        logger.info(f"Guild with ID {DISCORD_GUILD_ID} not found.")
+        return
+
+    # Prepare a list of member who should be members on CTFd
+    members_to_sync = [
+        member for member in guild.members
+        if not member.bot and any(role.name == "Membre" for role in member.roles)
+    ]
+    payload = {
+        "users": [{"discord_name": member.name, "discord_id": str(member.id)} for member in members_to_sync]
+    }
+    try:
+        res = requests.patch(f"http://ctfd-ctfd-1:8000/plugins/ctfrei_registration/sync", headers={
+            "X-Signature": hmac.new(
+                WEBHOOK_SECRET.encode(),
+                json.dumps(payload).encode("utf-8"),
+                hashlib.sha256
+            ).hexdigest()
+        }, json=payload)
+        res.raise_for_status()
+
+        affected = res.json().get("affected", 0)
+        logger.info(f"Successfully synced {affected} members to CTFd.")
+
+        return affected
+    except requests.RequestException as e:
+        logger.error(f"Error syncing members to CTFd: {e}")
+        return None
+
+
+@bot.tree.command(name="sync-members", description="Synchronise les membres de ce serveur au CTFd.",
+                  guild=discord.Object(id=DISCORD_GUILD_ID))
+@commands.has_permissions(administrator=True)
+async def sync_members_command(ctx: discord.Interaction):
+    """sync members from discord to CTFd on command"""
+    await ctx.response.defer(ephemeral=True)
+    affected = await sync_members()
+    if affected is not None:
+        await ctx.edit_original_response(content=f"Synchro terminée ! "
+                                                 f"{affected} membre{'s' if affected != 1 else ''} "
+                                                 f"affecté{'s' if affected != 1 else ''}.")
+    else:
+        await ctx.edit_original_response(content="J'ai pas réussi à synchro. Vérifie les logs.")
+    await log(ctx, EVENT_LOG_FILE, f"REQ: Synced the members by {ctx.user.name}\n")
+
+
+@tasks.loop(minutes=5)
+async def sync_members_task():
+    print(f"Synced and affected {await sync_members()} members.")
+
 
 """refresh every 24h of event cache"""
 @tasks.loop(hours=24)
@@ -956,6 +1129,7 @@ async def automatic_refresh():
         api_call("https://ctftime.org/api/v1/events/?limit=100", UPCOMING_CTFTIME_FILE)
     except Exception as e:
         print(f"Refresh now: {e}")
+
 
 def loops_check(message):
     with open("./loops.log", "w") as file:
@@ -968,10 +1142,11 @@ async def weekly_refresh():
 
     loops_check("loop started")
 
-    if datetime.today().isoweekday() != DAY_OF_WEEK_RECOMMENDATION :  # Check if today is monday
+    if datetime.today().isoweekday() != DAY_OF_WEEK_RECOMMENDATION:  # Check if today is monday
         return
 
-    data = await search_ctf_data(UPCOMING_CTFTIME_FILE, str(WEIGHT_START_RECOMMENDATION), int(WEIGHT_RANGE_RECOMMENDATION))
+    data = await search_ctf_data(UPCOMING_CTFTIME_FILE, str(WEIGHT_START_RECOMMENDATION),
+                                 int(WEIGHT_RANGE_RECOMMENDATION))
 
     # check if any are coming in the next X weeks
     now = datetime.now(timezone.utc)
@@ -981,9 +1156,10 @@ async def weekly_refresh():
         if datetime.fromisoformat(event['start']).replace(tzinfo=timezone.utc) <= x_weeks_later
     ]
     if not data:
-        print(f"Aucun CTFs n'ont pu être trouvés entre {0 if (WEIGHT_START_RECOMMENDATION - WEIGHT_RANGE_RECOMMENDATION) < 0 else (WEIGHT_START_RECOMMENDATION - WEIGHT_RANGE_RECOMMENDATION)} et {100 if (WEIGHT_START_RECOMMENDATION + WEIGHT_RANGE_RECOMMENDATION) > 100 else (WEIGHT_START_RECOMMENDATION + WEIGHT_RANGE_RECOMMENDATION)} de weight dans les {WEEKS_RANGE_RECOMMENDATION} prochaines semaines.", ephemeral=True)
+        print(
+            f"Aucun CTFs n'ont pu être trouvés entre {0 if (WEIGHT_START_RECOMMENDATION - WEIGHT_RANGE_RECOMMENDATION) < 0 else (WEIGHT_START_RECOMMENDATION - WEIGHT_RANGE_RECOMMENDATION)} et {100 if (WEIGHT_START_RECOMMENDATION + WEIGHT_RANGE_RECOMMENDATION) > 100 else (WEIGHT_START_RECOMMENDATION + WEIGHT_RANGE_RECOMMENDATION)} de weight dans les {WEEKS_RANGE_RECOMMENDATION} prochaines semaines.",
+            ephemeral=True)
         return None
-
 
     if DISABLE_ZERO_WEIGHT_RECOMMENDATION:
         data = [event for event in data if event['weight'] > 0]
@@ -996,7 +1172,6 @@ async def weekly_refresh():
     guild = bot.get_guild(DISCORD_GUILD_ID)
     join_channelid = CTF_JOIN_CHANNEL[guild.name]
     join_channel = guild.get_channel(join_channelid)
-
 
     # prepare the embeded message for discord limiting to NUMBER_OF_RECOMMENDATIONS
     embeded_message = discord.Embed(
@@ -1016,28 +1191,27 @@ async def weekly_refresh():
             color=discord.Color.gold()
         )
 
-        embeded_message.set_author(name="CTFREI RECOMMENDATION AUTOMATIQUE",icon_url="https://www.efrei.fr/wp-content/uploads/2024/07/ctefrei.png")
+        embeded_message.set_author(name="CTFREI RECOMMENDATION AUTOMATIQUE",
+                                   icon_url="https://www.efrei.fr/wp-content/uploads/2024/07/ctefrei.png")
 
         if CTF['logo']:
             embeded_message.set_thumbnail(url=CTF['logo'])
 
-        embeded_message.add_field(name=f"**Informations :**", value=f":stopwatch: durée du CTF : {(int(CTF['duration']['days'])*24) + (CTF['duration']['hours'])} heures\n:man_lifting_weights: Weight estimé {CTF['weight'] if int(CTF['weight']) != 0 else 'inconnu'}", inline=True)
+        embeded_message.add_field(name=f"**Informations :**",
+                                  value=f":stopwatch: durée du CTF : {(int(CTF['duration']['days']) * 24) + (CTF['duration']['hours'])} heures\n:man_lifting_weights: Weight estimé {CTF['weight'] if int(CTF['weight']) != 0 else 'inconnu'}",
+                                  inline=True)
 
-        embeded_message.add_field(name="**URI links:**", value=f"<:ctftime:1320354001287647264> [CTFTIME]({CTF['ctftime_url']})\n<:site:1320352422056693821> [CTFd]({CTF['url']})\n", inline=True)
+        embeded_message.add_field(name="**URI links:**",
+                                  value=f"<:ctftime:1320354001287647264> [CTFTIME]({CTF['ctftime_url']})\n<:site:1320352422056693821> [CTFd]({CTF['url']})\n",
+                                  inline=True)
 
-        embeded_message.add_field(name="# **Dates:**", value=f":date: Du <t:{int((datetime.fromisoformat(CTF['start'])).timestamp())}:F> au <t:{int((datetime.fromisoformat(CTF['finish'])).timestamp())}:F>", inline=False)
+        embeded_message.add_field(name="# **Dates:**",
+                                  value=f":date: Du <t:{int((datetime.fromisoformat(CTF['start'])).timestamp())}:F> au <t:{int((datetime.fromisoformat(CTF['finish'])).timestamp())}:F>",
+                                  inline=False)
 
         embeded_message.add_field(name="**Description:**", value=f"{CTF['description'][:1200:]}", inline=False)
 
         await join_channel.send(embed=embeded_message)
-
-
-
-
-
-
-
-
 
 
 #"""DEV COMMANDS (DELETE/COMMENT BEFORE PRODUCTION)"""
@@ -1048,14 +1222,8 @@ async def weekly_refresh():
 #    print("test")
 
 
-
-
-
-
-
-
-
 """BOT STARTING AND CHECKING"""
+
 
 async def basic_setup():
     """minimum necessary to start the bot, is checked as startup"""
@@ -1064,11 +1232,11 @@ async def basic_setup():
             mkdir('log')
             print(f"Current CTF dir ('/log') has been created.")
 
-        if not p.isdir(CURRENT_CTF_DIR): # check for current CTF dir
+        if not p.isdir(CURRENT_CTF_DIR):  # check for current CTF dir
             mkdir(CURRENT_CTF_DIR)
             print(f"Current CTF dir ({CURRENT_CTF_DIR}) has been created ")
 
-        if not p.isdir(PAST_CTF_DIR): # check for past CTF dir
+        if not p.isdir(PAST_CTF_DIR):  # check for past CTF dir
             mkdir(PAST_CTF_DIR)
             print(f"Past CTF dir ({PAST_CTF_DIR}) has been created ")
 
@@ -1091,28 +1259,37 @@ async def basic_setup():
         print("Error during SETUP CHECKING")
         return 1
 
+
 @bot.event
 async def on_ready():
     for guild in bot.guilds:
         await guild.chunk()
 
-    if "testing_command" in globals(): # make sure the testing command is not running in production
-        print("#"*20, "\n\nIMPORTANT : THE TESTING COMMAND IS ON (line ~892), PLEASE REMOVE IT BEFORE PRODUCTION.\n\n", "#"*20)
+    if "testing_command" in globals():  # make sure the testing command is not running in production
+        print("#" * 20,
+              "\n\nIMPORTANT : THE TESTING COMMAND IS ON (line ~892), PLEASE REMOVE IT BEFORE PRODUCTION.\n\n",
+              "#" * 20)
 
     if "sync" in globals():
-        print("#"*20, "\n\nNote : THE SYNC COMMAND IS ON (line ~780).\n\n", "#"*20)
+        print("#" * 20, "\n\nNote : THE SYNC COMMAND IS ON (line ~780).\n\n", "#" * 20)
 
     """bot startup routine"""
     await basic_setup()
     await bot.tree.sync()
-    await refresh_interactions(DISCORD_GUILD_ID, [CTF_JOIN_CHANNEL['CTFREI'], CTF_ANNOUNCE_CHANNEL['CTFREI']['channel_id']]) # refresh all current interactions, and delete old join interactions
+    await refresh_interactions(DISCORD_GUILD_ID, [CTF_JOIN_CHANNEL['CTFREI'], CTF_ANNOUNCE_CHANNEL['CTFREI'][
+        'channel_id']])  # refresh all current interactions, and delete old join interactions
     automatic_refresh.start()
     weekly_refresh.start()
     print(f'Logged in as {bot.user}')
     loops_check("bot restarted")
 
+
 async def start_bot():
+    # force discord to log to stdout too!!!!
+    stream_handler = logging.StreamHandler(sys.stdout)
+    discord.utils.setup_logging(handler=stream_handler, level=logging.INFO)
     await bot.start(TOKEN)
+
 
 async def main():
     from registering import app
@@ -1125,6 +1302,6 @@ async def main():
     await asyncio.gather(api_task, bot_task)
 
 
-if CTFREI == '__GOATS__': # FACT
+if CTFREI == '__GOATS__':  # FACT
     asyncio.run(main())
     # bot.run(TOKEN)
